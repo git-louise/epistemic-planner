@@ -35,8 +35,7 @@ Given a knowledge structure, a finite repertoire of epistemic actions, and a goa
 ```
     stack run epistemic-planner -- [INSTANCE ...] [VARIANT ...] [OPTION ...]
 ```
-
-    Instances, variants and options themselves can be mixed in any order and run in the given order. At least one variant must be named, either as a bare word or via `--variants=`. 
+   Instances, variants and options themselves can be mixed in any order and run in the given order. At least one variant must be named, either as a bare word or via `--variants=`. 
 
 
 ## Instances
@@ -79,8 +78,7 @@ The same question is decided in four ways, so that run times, sizes and certific
 
 ## References
 
-Main reference for the constructions implemented here, also containing the
-benchmark table:
+Main reference for the constructions implemented here, also containing a benchmark table:
 
 - The accompanying thesis: the public-choice union is Chapter 3, the pruning pipeline and the literal fixpoint are Chapter 5, audience pruning and the link certificate are Appendix A.
 
