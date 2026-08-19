@@ -9,7 +9,6 @@ Given a knowledge structure, a finite repertoire of epistemic actions, and a goa
 1) Use *stack* from https://www.stackage.org
 
 - `stack build` will build an executable `epistemic-planner`, and `stack install` copies it into `~/.local/bin`.
-- A C++ compiler such as `g++` has to be available, because [HasCacBDD](https://github.com/m4lvin/HasCacBDD) compiles the bundled [CacBDD](http://kailesu.net/CacBDD/) sources during the build. Apart from that, stack fetches everything.
 
 2) Pick an instance and at least one search variant. Run `stack run epistemic-planner -- peekA prune --max=3` resulting in:
 
