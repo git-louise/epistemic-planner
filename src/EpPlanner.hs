@@ -31,29 +31,43 @@ and checked with SMCDEL's model checker for verification.
 
 = Usage
 
-[TODO]
-Named instances: peekA, peekB, share, relay, askA, askB, tell and
-askAll, plus the scaled families muddyN, askN and askbN (so for
-example muddy4 or ask3). With no instance named, a small demo set runs.
+@
+stack run epistemic-planner -- [INSTANCE ...] [VARIANT ...] [OPTION ...]
+@
 
-for example:
-stack run epistemic-planner -- main peekA prune full --quiet
+Instances, variants and options can be mixed in any order and run in the
+order given. At least one variant must be named, either as a bare word
+(@tree@, @union@, @prune@, @full@) or via @--variants=@. 
 
-Options that we have:
+The named instances are peekA, peekB, share, relay, askA, askB, tell and
+askAll; the scaled families are muddyN, askN and askbN, so muddy4 or ask3
+are also valid names. For example:
 
---max=K sets the horizon cap, default 10. 
---timeout=S sets seconds per puzzle-and-method cell, default 60. 
---variants=prune,full selects methods by comma-separated list. It adds them to the named ones i think
---csv=FILE additionally writes the summary table to file (hopefully)
---quiet suppresses the round-by-round log and the per-horizon readings lines.
-the results, plans, replay results and the summary table still print.
+@
+stack run epistemic-planner -- peekA prune full --quiet
+stack run epistemic-planner -- tell muddy2 tree union prune full --max=8 --csv=out.csv
+@
 
-= Build requirement
+Options:
 
-[TODO]
+[@--max=K@] horizon cap; the search gives up after K rounds (default 10).
+
+[@--timeout=S@] wall clock limit in seconds per instance-and-variant cell
+(default 60). The cpu column of the summary reports CPU time, not wall time.
+
+[@--variants=v1,v2@] selects variants by comma-separated list; appended to
+any bare variant names, duplicates dropped, order preserved.
+
+[@--csv=FILE@] additionally writes the summary table to FILE.
+
+[@--quiet@] suppresses the round-by-round log and the per-horizon readings
+lines; results, plans, replay verdicts and the summary table still print.
+
+Every plan that is found is replayed on an independent single-pointed
+pipeline and checked with SMCDEL; the verdict is printed next to each plan
+and in the summary.
 -}
 
--- {-# OPTIONS_GHC -option #-} [TODO]
 
 {-# LANGUAGE DerivingStrategies #-}
 
@@ -65,7 +79,7 @@ import Data.Char (isDigit)
 import Data.HasCacBDD (Bdd, allVarsOfSorted, anySatWith, bot, con, conSet, dis,
     disSet, equ, evaluateFun, exists_, existsSet, forallSet, imp, neg, relabel,
     restrict, sizeOf, top, var, xor)
-import Data.List (foldl', intercalate, intersect, nub, sort, sortBy,
+import Data.List (foldl', intercalate, elemIndex, intersect, nub, sort, sortBy,
     stripPrefix, subsequences, (\\))
 import Data.Maybe (fromMaybe)
 import Data.Ord (comparing)
@@ -77,7 +91,7 @@ import Text.Printf (printf)
 
 import SMCDEL.Language (Agent, Form (Conj, Disj, Equi, K, Kw, Neg, PrpF),
     HasAgents (agentsOf), HasVocab (vocabOf), Prp (P), agentsInForm)
-import SMCDEL.Symbolic.S5 (KnowStruct (KnS), State, bddOf, evalViaBdd)
+import SMCDEL.Symbolic.S5 (KnowStruct (KnS), State, bddOf, evalViaBdd, boolBddOf)
 
 
 -- * Reading the SMCDEL types
@@ -95,7 +109,7 @@ lawOf (KnS _ law _) = law  -- pattern match on the three fields, return the law 
 -- | The atoms that agent @i@ observes. Two states are @i@-indistinguishable iff
 -- they agree on this set. An unknown agent observes nothing.
 obsFor :: KnowStruct -> Agent -> [Prp]
-obsFor (KnS _ _ obs) i = fromMaybe [] (lookup i obs)  
+obsFor (KnS _ _ obs) i = fromMaybe [] (lookup i obs)
 -- obs is an association list [(Agent, [Prp])]
 -- lookup i obs returns Just [Prp] or Nothing, fromMaybe [] gives [] for Nothing.
 
@@ -150,8 +164,6 @@ data MPEvent = MPEvent
     , mpObs   :: ![(Agent, [Prp])]  -- ^ the added observables, per agent
     , mpPts   :: !Bdd               -- ^ the designated set, as a BDD xi_X
     }
--- // MG: is applyEvent the same as the code for
--- "instance Update MultipointedKnowScene MultipointedEvent" in S5.hs ? TODO
 
 {- | The knowledge transformation described in Chapter 2, F times \X: the
 vocabulary increases by the event atoms, the law is conjoined with the
@@ -211,10 +223,10 @@ each schema's instantiation. The pipeline realises a round by folding all @m@
 branches into that one union. The tree realises the same action by enumerating 
 the branches as separate paths.
 -}
-newtype Repertoire = Repertoire 
+newtype Repertoire = Repertoire
     { unRepertoire :: [MPEventSchema]
     }
-    
+
 -- | The schemas in a repertoire, in their fixed enumeration order.
 branchesOf :: Repertoire -> [MPEventSchema]
 branchesOf = unRepertoire
@@ -247,7 +259,7 @@ argument .
 Besides the event we return the choice atoms, the per-branch atom lists and
 the metadata table, which is needed for plan extraction and the scan order.
 -}
-instantiateUnion :: 
+instantiateUnion ::
     [Agent] ->  -- the agents of the planning problem
     Repertoire ->  --the MP event schemas to fold into one round
     Int ->  -- the round number @r@, fixing the fresh id block
@@ -268,8 +280,8 @@ instantiateUnion ags rep r =
     brs = branchesOf rep
 
      -- how many branches the union has to distinguish
-    m :: Int  
-    m = length brs 
+    m :: Int
+    m = length brs
 
     -- We need k choice bits to distinguish m branches (at least 1, even for m=1, 
     -- so the layout is always uniform, the forced-constant bit is pruned away immediately).
@@ -278,7 +290,7 @@ instantiateUnion ags rep r =
 
     -- the first id this round owns
     base :: Int
-    base = 1000 * r  
+    base = 1000 * r
 
     -- The k choice-bit atoms: ids base+0, base+1, ..., base+k-1.
     bits :: [Prp]
@@ -296,7 +308,7 @@ instantiateUnion ags rep r =
          -- branch b gets consecutive ids from its offset, one per declared atom name
         [ [ P (base + off + j) | j <- [0 .. length (esAtoms b) - 1] ]
         -- pair each branch with its offset (extra offset entry ignored)
-        | (b, off) <- zip brs offsets   
+        | (b, off) <- zip brs offsets
         ]
 
     -- The encoding enc(i) from Section 3.2: the bits true in the binary code of branch i.
@@ -312,21 +324,15 @@ instantiateUnion ags rep r =
     codeF :: Int -> Form
     codeF i = Conj
         -- Form version: the true bits of branch i's code ...
-        (  [ PrpF c | c <- enc i ]  
+        (  [ PrpF c | c <- enc i ]
         -- ... and the negations of all the other bits
-        ++ [ Neg (PrpF c) | c <- bits, c `notElem` enc i ] 
+        ++ [ Neg (PrpF c) | c <- bits, c `notElem` enc i ]
         )
 
     -- The same code as a BDD, for use in the designated set BDD, which is purely
     -- boolean and needs no translation.
-    -- // MG: you could use "boolBddOf (codeF i)" here? TODO
     codeB :: Int -> Bdd
-    codeB i = conSet
-        -- Bdd version: same true bits ...
-        (  [ var (unP c) | c <- enc i ]
-        -- ... same negated bits
-        ++ [ neg (var (unP c)) | c <- bits, c `notElem` enc i ]
-        )
+    codeB i = boolBddOf (codeF i)
 
     -- The inactive-branch forcing of Section 3.2: when branch i fires, the atoms of 
     -- every other branch are forced to be false. Tis makes sure that the vocabulary
@@ -341,12 +347,8 @@ instantiateUnion ags rep r =
         ]
 
     -- The BDD version of the same inactive padding
-    -- // MG: again, maybe use "boolBddOf" here? TODO
     inactB :: Int -> Bdd
-    inactB i = conSet
-        [ neg (var (unP q))
-        | (j, qs) <- zip [(1 :: Int) ..] brAts, j /= i, q <- qs 
-        ]
+    inactB i = boolBddOf (inactF i)
 
     -- The union event law: some branch i fires, meaning that this branch's code holds, 
     -- its event law holds, and the atoms of every other branch are off.
@@ -356,7 +358,7 @@ instantiateUnion ags rep r =
     lawU :: Form
     lawU = Disj
         -- one disjunct per branch: code /\ branch law /\ padding
-        [ Conj [codeF i, esLaw b (brAts !! (i - 1)), inactF i]  
+        [ Conj [codeF i, esLaw b (brAts !! (i - 1)), inactF i]
         | (i, b) <- zip [1 ..] brs  -- branches are 1-indexed, the list is not
         ]
       -- brs !! (i-1) is branch i's spec (0-indexed list, 1-indexed branches)
@@ -382,7 +384,7 @@ instantiateUnion ags rep r =
     obsU =
         [ ( a
           -- for each agent a: all k choice bits, plus ...
-          , bits ++ concat 
+          , bits ++ concat
                  -- ... a's part of branch i's atoms (empty if the branch gives a nothing new)
                 [ fromMaybe [] (lookup a (esObs b (brAts !! (i - 1))))
                  -- collected across all branches
@@ -419,7 +421,7 @@ inverse of the encoding above, summing @2^j@ over the bits that the assignment
 sets, that is, we reconstruct the branch index as 1 + sum_{j : bit_j is true in val} 2^j. 
 -}
 -- choice bits and a total assignment to a 1-based branch index
-decodeBranch :: [Prp] -> [(Int, Bool)] -> Int 
+decodeBranch :: [Prp] -> [(Int, Bool)] -> Int
 decodeBranch bits val = 1 + sum
     [ 2 ^ j
     -- j = bit position, c = the atom
@@ -510,7 +512,7 @@ mkCtx :: KnowStruct -> PruneCtx
 mkCtx (KnS voc law _) = PruneCtx
     { pcSupport  = allVarsOfSorted law  -- the vars the law actually mentions
      -- the plain copy: every id doubled; sorted so relabelSafe accepts the map
-    , pcLawPlain = relabelSafe (sort [ (unP v, 2 * unP v) | v <- voc ]) law 
+    , pcLawPlain = relabelSafe (sort [ (unP v, 2 * unP v) | v <- voc ]) law
     }
 
 {- | Is the atom @q@ prunable, with back and forth required only for the
@@ -562,7 +564,7 @@ prunable audience ctx kns@(KnS voc law obs) q =
   where
     -- who actually constrains the merge: observes q AND is in the audience
     observers :: [(Agent, [Prp])]
-    observers = [ (j, os) | (j, os) <- obs, q `elem` os, j `elem` audience] 
+    observers = [ (j, os) | (j, os) <- obs, q `elem` os, j `elem` audience]
 
     -- The two cofactors of the law at q; both are q-free.
     thT, thF :: Bdd
@@ -587,7 +589,7 @@ prunable audience ctx kns@(KnS voc law obs) q =
     -- renames every retained variable vv to a fresh starred copy:v -> 2v + 1, 
     -- applied only to q-free BDDs
     rn1 :: Bdd -> Bdd
-    rn1 = relabelSafe (sort [ (unP v, 2 * unP v + 1) | v <- keep ]) 
+    rn1 = relabelSafe (sort [ (unP v, 2 * unP v + 1) | v <- keep ])
 
     -- starred cofactors, computed once, reused by every observer
     rn1T, rn1F :: Bdd
@@ -647,7 +649,7 @@ By Lemma 5.3 this agrees with reducing the event itself and then applying it.
 -- the BDD law, and every agent's observable vocabulary.
 pruneAtom :: KnowStruct -> Prp -> KnowStruct
 pruneAtom (KnS voc law obs) q =
-    KnS (voc \\ [q]) (exists_ (unP q) law) [ (j, os \\ [q]) | (j, os) <- obs ] 
+    KnS (voc \\ [q]) (exists_ (unP q) law) [ (j, os \\ [q]) | (j, os) <- obs ]
     -- (\\) is list difference: q deleted from the vocabulary and every O_j;
     -- exists_ projects it out of the law
 
@@ -689,11 +691,11 @@ initPipeline f = Pipeline
 -- | infoOf looks up the metadata for an atom q in the pipeline's metadata table. 
 -- If no metadata exists, it returns a fallback AtomInfo instead of failing.
 infoOf :: Pipeline -> Prp -> AtomInfo
-infoOf pl q = 
-    fromMaybe 
+infoOf pl q =
+    fromMaybe
         (AtomInfo (-1) 9 0 (show q)) -- round -1, block 9 sorts after everything important; show q as the name
-        (lookup q (plMeta pl))  
-    
+        (lookup q (plMeta pl))
+
 
 {- | The scan order. Candidates are the event atoms only, scanned by
 creation round, newest round first. Within a round, choice bits before branch
@@ -757,7 +759,7 @@ stepPipeline doPrune pruneAgs ags rep pl
     --This applies the new event u to the current epistemic/knowledge structure:
     -- g' is the expanded KnowStruct, lawB is the BDD translation of the event law against the previous structure
     -- so law(g')= law(g) /\ lawB
-    
+
     -- This takes the old Pipeline record pl and replaces only the fields listed inside; 
     -- all other fields remain unchanged.
     extended :: Pipeline
@@ -833,7 +835,7 @@ prunePass audience pl0 = go pl0 (mkCtx (plStruct pl0)) False (candOrder pl0)
         g' = pruneAtom (plStruct pl) q
         -- This removes q from the structure: delete it from the vocabulary;
         -- existentially quantify it out of the state law; remove it from every agent's observable vocabulary. 
-        
+
         -- then update the pipeline consistently
         pl' :: Pipeline
         pl' = pl
@@ -857,7 +859,7 @@ vocabulary never changes again. A goal that is not reached at the fixpoint is
 unreachable at every horizon.
 -}
 samePipeline :: Pipeline -> Pipeline -> Bool
-samePipeline a b =    
+samePipeline a b =
        sort (vocabOf (plStruct a)) == sort (vocabOf (plStruct b)) -- same atoms (sorted first)
     && lawOf (plStruct a) == lawOf (plStruct b)  -- same law
     && nrm (plStruct a) == nrm (plStruct b)  -- same observables, normalised
@@ -889,7 +891,7 @@ largestBisim :: [Agent] -> [Prp] -> KnowStruct -> KnowStruct -> Bdd
 -- beta0 is the base relation, beta0(s,t) = theta_1(s) /\ theta_2(t) /\ /\_{p in v} (p(s) <-> p(t))
 -- So initially, pairs are allowed only if: the left component is a legal g1 state; 
 -- the right component is a legal g2 state; they agree on every atom in v.
-largestBisim agsB v g1@(KnS voc1 th1 _) g2@(KnS voc2 th2 _) = go beta0  
+largestBisim agsB v g1@(KnS voc1 th1 _) g2@(KnS voc2 th2 _) = go beta0
   where
     -- the union of proposition IDs used by either structure, sorted and deduplicated.
     allIds :: [Int]
@@ -937,7 +939,7 @@ largestBisim agsB v g1@(KnS voc1 th1 _) g2@(KnS voc2 th2 _) = go beta0
     -- Agreement of two copies on a set of atoms. Same observables is 
     -- what "j-successor" means, so this is how the epistemic step is encoded
     eqOn :: (Int -> Int) -> (Int -> Int) -> [Prp] -> Bdd
-    eqOn ofL ofR ps = conSet [ equ (var (ofL (unP p))) (var (ofR (unP p))) | p <- ps ] 
+    eqOn ofL ofR ps = conSet [ equ (var (ofL (unP p))) (var (ofR (unP p))) | p <- ps ]
     -- In a knowledge structure, a j-accessible successor is a legal state that agrees with 
     -- the source state on the atoms observed by agent j. This creates equality constraints across copies.
     -- Example: eqOn lsOf ltOf (obsFor g1 j) denotes /\_{p in O_j^1}(p(s) <-> p(s')).
@@ -956,9 +958,9 @@ largestBisim agsB v g1@(KnS voc1 th1 _) g2@(KnS voc2 th2 _) = go beta0
     -- observables has some right-target partner (state, agrees with the
     -- right source on j's observables) that the shifted relation btaT links them
     forthFor :: Bdd -> Agent -> Bdd
-    forthFor btaT j = forallSet ltVars $ imp  
-        (con th1LT (eqOn lsOf ltOf (obsFor g1 j)))  
-        (existsSet rtVars (conSet [th2RT, eqOn rsOf rtOf (obsFor g2 j), btaT])) 
+    forthFor btaT j = forallSet ltVars $ imp
+        (con th1LT (eqOn lsOf ltOf (obsFor g1 j)))
+        (existsSet rtVars (conSet [th2RT, eqOn rsOf rtOf (obsFor g2 j), btaT]))
         -- BDD encoding of \forall s' (theta_1(s') /\ s ~_j^1 s' -> \exists t' (theta_2(t') /\ t ~_j^2 t' /\ beta(s', t')))
         -- Every j-indistinguishable successor s' of the left source state must have some j-indistinguishable successor 
         -- t' of the right source state such that (s', t') remains in the relation.
@@ -1036,8 +1038,7 @@ linkCert agsB v (g1@(KnS voc1 _ _), z1) (g2@(KnS voc2 _ _), z2) =
     allIds = sort (nub (map unP (voc1 ++ voc2)))
 
     posOf :: Int -> Int
-    posOf n = fromMaybe 0 (lookup n (zip allIds [0 ..])) 
-    -- // MG: hlint says to use `elemIndex` here? TODO
+    posOf n = fromMaybe 0 (elemIndex n allIds)
 
     -- The same source copies as in 'largestBisim', so that the guards and the
     -- relation are about the same variables.
@@ -1126,7 +1127,7 @@ data SearchResult = SearchResult
 
 
 -- * The pipeline search
- 
+
 {- | The search when using the composed version. THis is used by union, 
 prune and full. For each horizon, the two rho forms are computed, and 
 the success criterion is the accumulated weak reading: xi_S implies the 
@@ -1155,7 +1156,7 @@ searchPipeline :: Variant ->  --'VUnion', 'VPrune' or 'VFull'
     [Agent] ->  -- agents of the problem 
     KnowStruct ->  -- the initial structure 
     [State] ->  -- the designated initial states 
-    Repertoire -> 
+    Repertoire ->
     Form ->  -- goal formua 
     SearchResult
 searchPipeline variant maxR ags f bigS rep goal =
@@ -1179,7 +1180,7 @@ searchPipeline variant maxR ags f bigS rep goal =
     live :: [Agent]
     live = nub $ agentsInForm goal ++ concat
         -- concat the agents named in the event laws of repertoire branches.
-        [ agentsInForm (esLaw b [ P (900000 + i) | i <- [0 .. length (esAtoms b) - 1] ]) 
+        [ agentsInForm (esLaw b [ P (900000 + i) | i <- [0 .. length (esAtoms b) - 1] ])
         | b <- branchesOf rep
         ]
 
@@ -1191,32 +1192,32 @@ searchPipeline variant maxR ags f bigS rep goal =
 
     -- [Bdd] is the diamond of every horizon so far
     --Maybe (Pipeline, (Bdd, Bdd)) is the previous stage, with its forms
-    loop :: Pipeline -> [Bdd] -> [(Int, Readings)] -> [(Int, Int, Int)] 
+    loop :: Pipeline -> [Bdd] -> [(Int, Readings)] -> [(Int, Int, Int)]
          -> Maybe (Pipeline, (Bdd, Bdd)) -> SearchResult
     -- Order: success first, then the certificates, then the
     -- horizon cap, and only then another round
     loop pl dias hist sizes prev
-        | reached = finish (PlanFound (plRound pl) [ planFor s dias' | s <- bigS ])  
+        | reached = finish (PlanFound (plRound pl) [ planFor s dias' | s <- bigS ])
         -- ^ this is |= xi_S -> \/_{h=0}^r rho_h^diamond, i.e. every designated initial state 
         -- satisfies the weak/diamond condition at at least one horizon up to the current round.
         | otherwise = case prev of
             -- stages literally equal: Definition 5.35 fired, and by
             -- Theorem 5.36 nothing will ever change again
-            Just (p, _) | doPrune, samePipeline p pl -> 
-                finish (NoPlan (plRound pl - 1) "literal fixpoint") 
-            Just (p, (pD, pB)) | doSem  
+            Just (p, _) | doPrune, samePipeline p pl ->
+                finish (NoPlan (plRound pl - 1) "literal fixpoint")
+            Just (p, (pD, pB)) | doSem
                 , let r = plRound pl
                 , r .&. (r - 1) == 0   -- power of two: rounds 1,2,4,8 (Remark A.15)
                 , rD == pD, rB == pB  -- free precheck: current and previous rho_dia and rho_box BDDs are already identical
                 -- ^ when this is not the case, we avoid an expensive bisimulation calculation 
-                , linkCert live (vocabOf f)  
+                , linkCert live (vocabOf f)
                 -- ^ establishes a guarded total bisimulation link between the current/later 
                 -- and previous/earlier structures, for: the live audience live; the base vocabulary vocabOf f.
                     (plStruct pl, plGuard pl)   -- later stage
                     (plStruct p, plGuard p) ->  -- earlier stage
                 finish (NoPlan (plRound pl - 1) "link certificate")
                 -- ^ If all hold, the system concludes that no later horizon can change the relevant answer and reports
-            _ | plRound pl >= maxR -> finish (Exhausted (plRound pl))  
+            _ | plRound pl >= maxR -> finish (Exhausted (plRound pl))
               -- ^ If there is no success/certificate and the cap has been reached,the result is inconclusive give up :(
               | otherwise -> loop  -- no verdict yet: do one more round
                     (stepPipeline doPrune pruneAgs ags rep pl)   -- apply one more round, optionally prune to a fp
@@ -1225,21 +1226,21 @@ searchPipeline variant maxR ags f bigS rep goal =
         -- At the current pipeline stage, this computes:
         -- rD: the diamond/weak projection, there is a guarded continuation satisfying goal; 
         -- rB: the box/strong projection, all guarded continuations satisfy goal.
-        (rD, rB) = rhoForms (vocabOf f) (plStruct pl) (plGuard pl) goal 
+        (rD, rB) = rhoForms (vocabOf f) (plStruct pl) (plGuard pl) goal
 
         -- stores the diamond BDD for each horizon so far.
         dias' :: [Bdd]
-        dias' = dias ++ [rD] 
+        dias' = dias ++ [rD]
 
         -- records the four all/existential and weak/strong readings at the current round.
         hist' :: [(Int, Readings)]
-        hist' = hist ++ [(plRound pl, readingsFrom xiS (rD, rB))]  
+        hist' = hist ++ [(plRound pl, readingsFrom xiS (rD, rB))]
 
         -- what the log and the summary table report afterwards: (round number, vocabulary size, law-BDD size)
         sizes' :: [(Int, Int, Int)]
         sizes' = sizes ++
             [ ( plRound pl
-              , length (vocabOf (plStruct pl))  
+              , length (vocabOf (plStruct pl))
               , sizeOf (lawOf (plStruct pl))
               )
             ]
@@ -1247,7 +1248,7 @@ searchPipeline variant maxR ags f bigS rep goal =
         -- The accumulated weak criterion of the bounded iterate.
         -- Theorem 5.36: valid iff a plan exists within the current horizon.
         reached :: Bool
-        reached = imp xiS (disSet dias') == top  
+        reached = imp xiS (disSet dias') == top
 
         finish :: Outcome -> SearchResult
         finish out = SearchResult
@@ -1266,16 +1267,16 @@ searchPipeline variant maxR ags f bigS rep goal =
     -- So j is the shallowest horizon that works for s.
     planFor :: State -> [Bdd] -> (State, Maybe PlanTrace, Bool)
     planFor s dias =
-        case [ j | (j, d) <- zip [0 ..] dias, evaluateFun d (\n -> P n `elem` s) ] of 
+        case [ j | (j, d) <- zip [0 ..] dias, evaluateFun d (\n -> P n `elem` s) ] of
              -- all horizons whose diamond is true at s, evaluateFun just plugs
             -- the state in as a boolean valuation
             [] -> (s, Nothing, False)  -- can't happen once reached held
             -- call extractTrace on the unpruned construction because pruning may have 
             --removed choice-bit atoms needed to decode the selected branch/action trace.
-            (j : _) -> case extractTrace ags f rep goal j s of 
+            (j : _) -> case extractTrace ags f rep goal j s of
                  -- j is the shallowest horizon that works for this s
                 Nothing -> (s, Nothing, False)  -- extraction failed: shows FAIL
-                Just tr -> (s, Just tr, verifyTrace ags rep goal f s tr)  
+                Just tr -> (s, Just tr, verifyTrace ags rep goal f s tr)
                 -- ^ independently replays the extracted trace as a correctness check.
 
 
@@ -1314,16 +1315,16 @@ branchEvent r b = MPEvent
     -- Round r has the block from 1000r onwards, as in the union. Nodes of the
     -- same depth reuse the ids, which is harmless across separate structures.
     qs :: [Prp]
-    qs = [ P (1000 * r + j) | j <- [0 .. length (esAtoms b) - 1] ] 
+    qs = [ P (1000 * r + j) | j <- [0 .. length (esAtoms b) - 1] ]
 
 -- | Breadth-first search over the naive view (tree). This cannot certify
 -- impossibility. The search either finds a plan or runs out of horizon.
 -- Int is the horizon cap, KnowStruct the initial structure, [State] the 
 -- designated initial states, and Form the goal formula
-searchTree :: Int -> [Agent] -> KnowStruct -> [State] -> Repertoire -> Form 
+searchTree :: Int -> [Agent] -> KnowStruct -> [State] -> Repertoire -> Form
            -> SearchResult
 searchTree maxR ags f bigS rep goal =
-    go 0 [TreeNode f (lawOf f) []] [] [] [] [] []  
+    go 0 [TreeNode f (lawOf f) []] [] [] [] [] []
      -- ^ At depth 0: the frontier contains only the initial structure f; 
      -- its guard is the initial state law lawOf f; there is no action history;
      -- the accumulators for discovered nodes, diamond BDDs, readings, sizes, and logs are empty.
@@ -1370,9 +1371,9 @@ searchTree maxR ags f bigS rep goal =
          -- rho forms of every frontier node, computed here and reused below
          -- the BDD tuple is (diamondBDD, boxBDD)
         pairs :: [(TreeNode, (Bdd, Bdd))]
-        pairs =  
-            [ (nd, rhoForms baseV (tnStruct nd) (tnGuard nd) goal)  
-            | nd <- frontier  
+        pairs =
+            [ (nd, rhoForms baseV (tnStruct nd) (tnGuard nd) goal)
+            | nd <- frontier
             ]
 
         rD, rB :: Bdd
@@ -1383,27 +1384,27 @@ searchTree maxR ags f bigS rep goal =
 
         -- every node we have ever seen, with its diamond, needed for plan extraction 
         found' :: [(TreeNode, Bdd)]
-        found' = found ++ [ (nd, dB) | (nd, (dB, _)) <- pairs ] 
+        found' = found ++ [ (nd, dB) | (nd, (dB, _)) <- pairs ]
 
         dias' :: [Bdd]
-        dias' = dias ++ [rD] 
+        dias' = dias ++ [rD]
 
         hist' :: [(Int, Readings)]
-        hist' = hist ++ [(d, readingsFrom xiS (rD, rB))]  
+        hist' = hist ++ [(d, readingsFrom xiS (rD, rB))]
 
         -- frontier-wide maxima, for log line and summary table
         vmax, lmax :: Int
-        vmax = maximum [ length (vocabOf (tnStruct nd)) | nd <- frontier ] 
-        lmax = maximum [ sizeOf (lawOf (tnStruct nd)) | nd <- frontier ] 
+        vmax = maximum [ length (vocabOf (tnStruct nd)) | nd <- frontier ]
+        lmax = maximum [ sizeOf (lawOf (tnStruct nd)) | nd <- frontier ]
 
         sizes' :: [(Int, Int, Int)]
-        sizes' = sizes ++ [(d, vmax, lmax)] 
+        sizes' = sizes ++ [(d, vmax, lmax)]
 
         logs' :: [String]
         logs' = logs ++
-            [ "depth " ++ show d ++ ": " ++ show (length frontier)  
-                ++ " structures, max vocab " ++ show vmax  
-                ++ ", max law size " ++ show lmax  
+            [ "depth " ++ show d ++ ": " ++ show (length frontier)
+                ++ " structures, max vocab " ++ show vmax
+                ++ ", max law size " ++ show lmax
             ]
 
         -- The same accumulated weak criterion as in the pipeline search.
@@ -1423,7 +1424,7 @@ searchTree maxR ags f bigS rep goal =
             }
         | b <- branchesOf rep
         , let t = branchEvent r b  -- this branch, instantiated at round r
-        , let (g', lawB) = applyEvent (tnStruct nd) t 
+        , let (g', lawB) = applyEvent (tnStruct nd) t
         ]
 
     -- The accumulator grows in the order of depth, so the first hit is the
@@ -1432,14 +1433,14 @@ searchTree maxR ags f bigS rep goal =
     -- and translated goal, restricted to the initial state.
     planFor :: State -> [(TreeNode, Bdd)] -> (State, Maybe PlanTrace, Bool)
     planFor s found =
-        case [ nd | (nd, dB) <- found, evaluateFun dB (\n -> P n `elem` s) ] of  
+        case [ nd | (nd, dB) <- found, evaluateFun dB (\n -> P n `elem` s) ] of
             -- the recorded nodes whose diamond is true at s, oldest first
             [] -> (s, Nothing, False)
             (nd : _) ->
                 case anySatWith (map unP (vocabOf (tnStruct nd))) (goalHere nd) of
                     -- one satisfying assignment of guard /\ goal /\ "we are at s"
                     Nothing -> (s, Nothing, False) -- no witness: count as failed
-                    Just v -> 
+                    Just v ->
                         let tr = decodePath nd v
                         in (s, Just tr, verifyTrace ags rep goal f s tr)
       where
@@ -1447,8 +1448,8 @@ searchTree maxR ags f bigS rep goal =
         -- down: satisfying assignments are exactly the runs of this path from s
         goalHere :: TreeNode -> Bdd
         goalHere nd =
-            conSet [tnGuard nd, bddOf (tnStruct nd) goal, cubeOf baseV s] 
-         
+            conSet [tnGuard nd, bddOf (tnStruct nd) goal, cubeOf baseV s]
+
         -- the path is stored in tnRounds, so decoding is basically reading each
         -- branch's atoms out of the assignment, for each round
         decodePath :: TreeNode -> [(Int, Bool)] -> PlanTrace
@@ -1458,7 +1459,7 @@ searchTree maxR ags f bigS rep goal =
                 | (nm, q) <- zip (esAtoms b) qs  -- declared name <-> fresh atom
                 ]
               )
-            | (b, qs) <- tnRounds nd  
+            | (b, qs) <- tnRounds nd
             ]
 
 
@@ -1472,11 +1473,11 @@ the scan might have deleted the choice bits.
 -- KnowStruct is the initial structure
 -- Int is the horizon @j@ at which the diamond held
 -- State is the initial state to extract for
-extractTrace :: [Agent] -> KnowStruct -> Repertoire -> Form -> Int -> State 
+extractTrace :: [Agent] -> KnowStruct -> Repertoire -> Form -> Int -> State
              -> Maybe PlanTrace
 extractTrace _ _ _ _ 0 _ = Just []  -- If the required horizon is 0, it returns an empty plan
 -- if there is a witness, decode it round by round; a Nothing just propagates
-extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit 
+extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
 -- ^ If mwit= Nothing, return Nothing. If mwit= Just v, decode each saved round using the 
 -- satisfying assignment v, producing Just trace
   where
@@ -1490,7 +1491,7 @@ extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
     -- one unpruned round: apply the union, extend the guard, and remember
     -- this round's bits and branch atoms for decoding
     step :: (KnowStruct, Bdd, [([Prp], [[Prp]])]) -> Int -> (KnowStruct, Bdd, [([Prp], [[Prp]])])
-    step (g, z, acc) r = (g', con z (con (mpPts u) lawB), acc ++ [(bits, brAts)]) 
+    step (g, z, acc) r = (g', con z (con (mpPts u) lawB), acc ++ [(bits, brAts)])
       where
         (u, bits, brAts, _) = instantiateUnion ags rep r  -- meta not needed here
         -- ^ creates the round’s union event and receives: u: the constructed union MPEvent;
@@ -1503,7 +1504,7 @@ extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
     -- total assignment over the full vocabulary, so every bit and every
     -- branch atom has a value.
     mwit :: Maybe [(Int, Bool)]
-    mwit = anySatWith (map unP (vocabOf gk))  
+    mwit = anySatWith (map unP (vocabOf gk))
         (conSet [zk, bddOf gk goal, cubeOf (vocabOf f) s])
         -- This asks for one total satisfying assignment over the whole final vocabulary 
         -- of gk satisfying: z_k /\ ||goal||_gk /\ cube_{V_0}(s)
@@ -1513,7 +1514,7 @@ extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
     dec :: [(Int, Bool)] -> ([Prp], [[Prp]]) -> (String, [(String, Bool)])
     dec v (bits, brAts) =
         ( esName spec
-        , [ (nm, fromMaybe False (lookup (unP q) v)) 
+        , [ (nm, fromMaybe False (lookup (unP q) v))
           | (nm, q) <- zip (esAtoms spec) qs   -- declared names <-> fresh atoms
           ]
         )
@@ -1537,7 +1538,7 @@ which is disjoint from everything that either search would allocate.
 -- [Agent] is unused, as the replay reads the agent off of the structure
 -- KnowStruct is the initial structure
 -- State is the initial state
-verifyTrace :: [Agent] -> Repertoire -> Form -> KnowStruct -> State 
+verifyTrace :: [Agent] -> Repertoire -> Form -> KnowStruct -> State
             -> PlanTrace -> Bool
 verifyTrace _ags rep goal = go 1  -- round counter starts at 1, like the search
   where
@@ -1546,9 +1547,9 @@ verifyTrace _ags rep goal = go 1  -- round counter starts at 1, like the search
     go _ g s [] = evalViaBdd (g, sort s) goal  -- states are kept sorted
     go r g s ((nm, ev) : rest) =
         -- find the branch this plan entry names
-        case lookup nm [ (esName b, b) | b <- branchesOf rep ] of   
+        case lookup nm [ (esName b, b) | b <- branchesOf rep ] of
             Nothing -> False  -- an unknown action name: the plan is rejected
-            Just b ->  
+            Just b ->
                 -- fresh atoms for the replay, block 1000r+500..; these can't
                 -- collide with anything either search allocated
                 let qs = [ P (1000 * r + 500 + j)
@@ -1566,9 +1567,9 @@ verifyTrace _ags rep goal = go 1  -- round counter starts at 1, like the search
                     s' = sort (s ++ x)  -- new state: old atoms plus the event
                     -- The new state must satisfy the translated law, and the
                     -- event must be designated, we only continue if this is the case
-                    okSt = evaluateFun lawB (\n -> P n `elem` s') 
-                    okPt = evaluateFun (esPts b qs) (\n -> P n `elem` x) 
-                in okSt && okPt && go (r + 1) g' s' rest 
+                    okSt = evaluateFun lawB (\n -> P n `elem` s')
+                    okPt = evaluateFun (esPts b qs) (\n -> P n `elem` x)
+                in okSt && okPt && go (r + 1) g' s' rest
 
 -- * Printing
 
@@ -1598,7 +1599,7 @@ verifiedOf _ = ""
 -- | The per-cell report: the log and the per-horizon readings,
 -- then the outcome, with one line per initial state on success.
 renderCell :: Bool -> SearchResult -> String
-renderCell verbose sr = unlines (logLines ++ histLines ++ outLines) 
+renderCell verbose sr = unlines (logLines ++ histLines ++ outLines)
   where
     logLines :: [String]
     logLines
@@ -1613,7 +1614,7 @@ renderCell verbose sr = unlines (logLines ++ histLines ++ outLines)
                 ++ " strongAll=" ++ show (strongAll r)
                 ++ " weakEx=" ++ show (weakEx r)
                 ++ " strongEx=" ++ show (strongEx r)
-            | (k, r) <- srHist sr  
+            | (k, r) <- srHist sr
             ]
         | otherwise = []
 
@@ -1621,14 +1622,14 @@ renderCell verbose sr = unlines (logLines ++ histLines ++ outLines)
     outLines :: [String]
     outLines = case srOutcome sr of
         PlanFound k ps ->
-            ("  PLAN FOUND (horizon " ++ show k ++ ")") 
+            ("  PLAN FOUND (horizon " ++ show k ++ ")")
             -- per initial state: the plan, and how the replay went
             : [ "    from " ++ show (map unP s) ++ ": "
                     ++ maybe "?" showTrace mtr
-                    ++ "  [replay: " ++ (if ok then "PASS" else "FAIL") ++ "]" 
+                    ++ "  [replay: " ++ (if ok then "PASS" else "FAIL") ++ "]"
               | (s, mtr, ok) <- ps
               ]
-        NoPlan k why ->  
+        NoPlan k why ->
             [ "  NO PLAN EXISTS (certified by " ++ why
                 ++ " at round " ++ show k ++ ")"
             ]
@@ -1649,7 +1650,7 @@ data Problem = Problem
 -- | Dispatch: the tree has its own search, the other three share the
 -- pipeline
 runSearch :: Variant -> Int -> Problem -> SearchResult
-runSearch VTree maxR pr = 
+runSearch VTree maxR pr =
     searchTree maxR (prAgents pr) (prStart pr) (prInit pr) (prRep pr) (prGoal pr)
 runSearch v maxR pr =
     searchPipeline v maxR (prAgents pr) (prStart pr) (prInit pr) (prRep pr)
@@ -1683,8 +1684,8 @@ printTable rows = do
   where
     -- column widths here and in 'line' below have to match
     header :: String
-    header = pad 10 "instance" ++ pad 53 "variant" ++ pad 44 "result"  
-        ++ pad 10 "cpu (s)" ++ pad 10 "peak law" ++ pad 10 "end vocab"  
+    header = pad 10 "instance" ++ pad 53 "variant" ++ pad 44 "result"
+        ++ pad 10 "cpu (s)" ++ pad 10 "peak law" ++ pad 10 "end vocab"
         ++ "check"
 
     line :: Row -> String
@@ -1746,13 +1747,13 @@ parseArgs = foldl' step defaultOptions   -- fold the args into the record
     -- crashes on garbage numbers
     step :: Options -> String -> Options
     step o a
-        | Just v <- stripPrefix "--max=" a = o { optMax = read v } 
-        | Just v <- stripPrefix "--timeout=" a = o { optTimeout = read v } 
+        | Just v <- stripPrefix "--max=" a = o { optMax = read v }
+        | Just v <- stripPrefix "--timeout=" a = o { optTimeout = read v }
         | Just v <- stripPrefix "--variants=" a =
-            o { optVariants = optVariants o ++ map toVariant (splitOn ',' v) }  
+            o { optVariants = optVariants o ++ map toVariant (splitOn ',' v) }
             -- accumulate, don't replace: mixing the flag and bare names works
         | Just v <- stripPrefix "--csv=" a = o { optCsv = Just v }
-        | a == "--quiet" = o { optQuiet = True } 
+        | a == "--quiet" = o { optQuiet = True }
         | Just v <- lookup a variantsByName =
             o { optVariants = optVariants o ++ [v] }  -- a bare variant name
         | otherwise = o { optNames = optNames o ++ [a] }  --else: an instance
@@ -1776,13 +1777,13 @@ runCell :: Options -> String -> Problem -> Variant -> IO Row
 runCell opts nm pr v = do
     putStrLn ("-- " ++ variantName v)
     res <- timeout (optTimeout opts * 1000000) $ do  -- microseconds
-        t0 <- getCPUTime  
+        t0 <- getCPUTime
         let sr = runSearch v (optMax opts) pr  -- nothing has run yet
-        let detail = renderCell (not (optQuiet opts)) sr  
+        let detail = renderCell (not (optQuiet opts)) sr
         _ <- evaluate (length detail)  -- force the search behind the report
         t1 <- getCPUTime
         -- getCPUTime counts picoseconds
-        let secs = fromIntegral (t1 - t0) / 1.0e12 :: Double  
+        let secs = fromIntegral (t1 - t0) / 1.0e12 :: Double
         pure (sr, detail, secs)
     case res of
         Nothing -> do  -- the timeout fired
@@ -1821,7 +1822,7 @@ runProblem opts nm = case lookupProblem nm of
 -- requested cell, print the summary, and write the csv
 main :: IO ()
 main = do
-    opts0 <- parseArgs <$> getArgs 
+    opts0 <- parseArgs <$> getArgs
     -- nub keeps the first occurrence, so the order you typed is the order run
     opts <- case nub (optVariants opts0) of
         [] -> die ("no variant named; pick at least one of "
@@ -1829,7 +1830,7 @@ main = do
             ++ ", for example: main peekA prune full")
         vs -> pure opts0 { optVariants = vs }  -- deduplicated, in given order
     -- no instance named: fall back to the demo set
-    let names = if null (optNames opts) then defaultNames else optNames opts 
+    let names = if null (optNames opts) then defaultNames else optNames opts
     rows <- concat <$> mapM (runProblem opts) names  -- [[Row]], flattened
     putStrLn ""
     putStrLn "== summary =="
@@ -2105,7 +2106,7 @@ namedProblems =
 -- | Named instances first, then the prefix-plus-number families.
 lookupProblem :: String -> Maybe Problem
 lookupProblem nm
-    | Just p <- lookup nm namedProblems = Just p  
+    | Just p <- lookup nm namedProblems = Just p
     | Just k <- family "muddy" = Just (muddyProblem k)
     | Just k <- family "askb" = Just (askBProblem k)  -- before the ask case
     | Just k <- family "ask" = Just (askProblem k)

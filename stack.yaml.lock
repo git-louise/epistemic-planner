@@ -29,6 +29,13 @@ packages:
       size: 866
   original:
     hackage: decision-diagrams-0.2.0.0
+- completed:
+    hackage: smcdel-1.3.0@sha256:97b7b7a09199c76b7a2f552fce28973bf448d9eb44e059a228571f6a454b73fd,8448
+    pantry-tree:
+      sha256: d08fa2b84d509182633c9bbeca73f77c7ff5507b7f5beba7b2f987573ca9fa60
+      size: 5022
+  original:
+    hackage: smcdel-1.3.0
 snapshots:
 - completed:
     sha256: a81fb3877c4f9031e1325eb3935122e608d80715dc16b586eb11ddbff8671ecd
