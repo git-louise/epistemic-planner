@@ -1,47 +1,50 @@
 {- | Plan extraction for iterated epistemic actions.
  
-Given an initial knowledge structure, a finite library of action schemas,
-and a goal formula, this planning tool decides the accumulated weak reading: 
-from every designated initial state, some executable sequence of designated 
-events reaches the goal within the horizon. We give four different search 
-variants, their times, sizes and certificates can be compared on identical inputs.
+Given a knowledge structure, a finite repertoire of epistemic actions schemas, 
+and a goal formula, this tool searches for action sequences after which the goal 
+formula holds. If it cannot find such a sequence the tool tries to certify this. 
+If a plan is found, the tool re-executes it along an independent single-pointed path. 
+It then uses SMCDEL to check if the goal formula holds. The result of this replay is 
+printed next to the found plan.
 
-* "tree" is the naive view, where we have one structure and one guard per 
-  action sequence, so we have @m^d@ structures at depth @d@. It can find plans, 
-  and it can run out of horizon, but it can never certify that it is impossible 
-  to find a plan for the given parameters.
+The tool implements four different search variants (modes), so that 
+their runtimes, the maximal event law size and vocabulary size, as well as
+the certificates that may have been found can be compared on identical inputs.
 
-* "union" is the composed view, following the constructions of Chapter 3. Here
-  we have one structure per horizon, built by the public-choice union, without 
-  pruning. The vocabulary grows in every round, which means that we can never find
-  a literal fixpoint (as it is described in Chapter 5)
+* "tree" corresponds to the naïve approach. The search tree is branched over the 
+action sequences: one structure and guards per structure are generated for each 
+action sequence. At depth @d@, this results in @m^d@ structures. A plan can be 
+found or reported not found for the given horizon, but this mode cannot be used 
+to prove that no plan exists.
 
-* "prune" also uses the composed construction and additionally runs the full 
-  Psi scan (given in Proposition 5.6) after every round. Here we can use the literal
-  fixpoint as a convergence certificate.
 
-* "full" implements the approach presented in the appendix: we prune relative to 
-  the audience of the goal and the event laws. Additionally, we use the bisimulation-
-  link certificate of Definition A.12 with the agreement precheck and geometric 
-  schedule presented in Remark A.15
-  
+* "union" is the composed approach. It constructs one structure per horizon. 
+It does not prune atoms. Since the vocabulary increases with every round, this 
+variant cannot be used to detect a literal fixpoint.
 
-Every found plan is re-executed along an independent single-pointed code path 
-and checked with SMCDEL's model checker for verification.
+* "prune" uses the composed public-choice construction that is used in the union
+mode and pruning. This mode executes the full Psi scan of Proposition 5.6 after 
+every round. It can detect literal fixpoints and prove that no further application 
+of any action can affect the evaluation of the goal formula.
+
+* "full" uses the composed public-choice construction and prunes relativized to 
+the agents that are mentioned in the goal formula and the event laws. This mode 
+also searches for a bisimulation link (Definition A.12) using the geometric schedule 
+of Remark A.15, after performing the agreement precheck described there.
 
 = Usage
 
 @
-stack run epistemic-planner -- [INSTANCE ...] [VARIANT ...] [OPTION ...]
+stack run epistemic-planner -- [EXAMPLE ...] [VARIANT ...] [OPTION ...]
 @
+where the examples, variants and options themselves can be given in any order and 
+will then run in the given order. At least one variant must be given to the tool, 
+either as a bare word (@tree@, @union@, @prune@, @full@)  or using the option 
+ @--variants=@. 
 
-Instances, variants and options can be mixed in any order and run in the
-order given. At least one variant must be named, either as a bare word
-(@tree@, @union@, @prune@, @full@) or via @--variants=@. 
-
-The named instances are peekA, peekB, share, relay, askA, askB, tell and
-askAll; the scaled families are muddyN, askN and askbN, so muddy4 or ask3
-are also valid names. For example:
+The named examples are peekA, peekB, share, relay, askA, askB, tell and
+askAll. The scaled families of examples are muddyN, askN and askbN, so 
+muddy4 or ask3 are also valid names. For example:
 
 @
 stack run epistemic-planner -- peekA prune full --quiet
@@ -50,22 +53,19 @@ stack run epistemic-planner -- tell muddy2 tree union prune full --max=8 --csv=o
 
 Options:
 
-[@--max=K@] horizon cap; the search gives up after K rounds (default 10).
+[@--max=K@] sets the horizon up to which the tool searches for a plan to @K@. 
+The default is @K@=10.
 
-[@--timeout=S@] wall clock limit in seconds per instance-and-variant cell
-(default 60). The cpu column of the summary reports CPU time, not wall time.
+[@--timeout=S@] sets a time limit of @S@ seconds for each search (that is, 
+for each pair of example and search variant). The default is 60.
 
-[@--variants=v1,v2@] selects variants by comma-separated list; appended to
-any bare variant names, duplicates dropped, order preserved.
+[@--variants=v1,v2@] adds the search variants @v1@ and @v2@ to the search. 
+Variants that are mentioned multiple times are ignored.
 
-[@--csv=FILE@] additionally writes the summary table to FILE.
+[@--csv=FILE@] saves the results of the run to FILE. 
 
-[@--quiet@] suppresses the round-by-round log and the per-horizon readings
-lines; results, plans, replay verdicts and the summary table still print.
+[@--quiet@] hides the details of the search.
 
-Every plan that is found is replayed on an independent single-pointed
-pipeline and checked with SMCDEL; the verdict is printed next to each plan
-and in the summary.
 -}
 
 
@@ -148,15 +148,17 @@ relabelSafe rel
 
 -- * Multi-pointed events
 
-{- | A multi-pointed event in the sense of the Chapter 3: a knowledge
-transformer together with a designated set of events. The first three
-fields are the transformer, fresh atoms, event law and added observables,
-and the fourth is the characteristic BDD of the designated set, whose
-elements we call the actual events int he thesis. We keep the event law 
-in formula form because the modal operators are interpreted on whichever 
-structure the event is applied to. Multi-pointedness makes it possible for our
-planner to evaluate the plan existence question without fixing outcomes in
-advance.
+{- | A multi-pointed event consists of a symbolic knowledge transformer together
+with a designated set of possible events.
+The transformer has event atoms, it restricts the admissible events by
+an event law, and it specifies which of the event atoms are observed by each 
+of the agents. The designated set of possible events is represented by its 
+characteristic BDD. It determines which of the events are considered as actual 
+outcomes.
+We keep the event law as a formula instead a BDD, because it may contain modal 
+operators whose interpretation depends on the knowledge structure to which the 
+event is applied. The multi-pointedness allows the planner to reason about plan 
+existence without having to select a single outcome in advance.
 -}
 data MPEvent = MPEvent
     { mpProps :: ![Prp]             -- ^ the fresh event atoms
@@ -177,98 +179,70 @@ applyEvent :: KnowStruct -> MPEvent -> (KnowStruct, Bdd)
 applyEvent kns@(KnS v law obs) t = (KnS v' (con law lawB) obs', lawB)
   where
     -- Translate the (possibly modal) event law against the current structure.
-    -- Modal operators like K_a phi are evaluated in F; fresh V+ atoms stay freee.
+    -- Modal operators like K_a phi are evaluated in F; fresh V+ atoms stay free.
     lawB :: Bdd
     lawB = bddOf kns (mpLaw t)
     -- Extend the vocabulary: append the new event atoms after the base atoms.
-    -- The id-block convention makes sure that there are no collisions 
-    -- (round r owns ids 1000r..1000r+999).
+    -- (round r has the ids 1000r..1000r+999).
     v' :: [Prp]
     v' = v ++ mpProps t
-    -- Extend each agent's observables: keep O_i, add whatever O+_i the action gives.
-    -- fromMaybe [] handles agents absent from mpObs (they gain nothing)
+    -- Extend the observables, keep O_i, add whatever O+_i the action gives.
     obs' :: [(Agent, [Prp])]
     obs' = [ (i, o ++ fromMaybe [] (lookup i (mpObs t))) | (i, o) <- obs ]
 
 
 -- * Repertoires and the public-choice union
 
-{- | One multi-pointed event in the Repertoire, written as a schema, i.e., 
-the atoms are not yet fixed. THis is one @(\X_i, X_i)@ of Chapter 3.
-It is given not with concrete event atoms but instead has functions of the 
-corresponding round's fresh atoms, so that instantiating it at round @r@
-gives a concrete 'MPEvent', which is the fresh copy @X_{i,k}@ that the 
-iteration would otherwise build by renaming. The event laws, the observables,
-and the designated set are all functions of the supplied atoms, so every round
-instantiates the same schema over its own vocabulary and the copies are coherent
-by construction, we need this coherence for the stabilisation argument
--}
+-- | A schema for a multi-pointed event. This is @(\X_i, X_i)@ from Chapter 3, 
+-- but before the event atoms are instantiated for a given planning round.
+-- Note that we do not store the concrete event atoms here, we use a schema to 
+-- store an ordered list of event-atom names and functions that 
+-- can then be instantiated for a given round with the round's vocabulary
 data MPEventSchema = MPEventSchema
-    { esName  :: !String                       -- ^ display name, used in plans
-    , esAtoms :: ![String]                     -- ^ event-atom names; the arity
-    , esLaw   :: !([Prp] -> Form)              -- ^ the event law, given the atoms
-    , esObs   :: !([Prp] -> [(Agent, [Prp])])  -- ^ observability, given the atoms
+    { esName  :: !String                       -- ^ display name
+    , esAtoms :: ![String]                     -- ^ event-atom names
+    , esLaw   :: !([Prp] -> Form)              -- ^ the event law as a function
+    , esObs   :: !([Prp] -> [(Agent, [Prp])])  -- ^ observables as a function
     , esPts   :: !([Prp] -> Bdd)               -- ^ the designated set
     }
 
 
-{- | The non-deterministic action of one round, kept as a list of schemas: the
-branches (i.e. 'MPEventSchema') @X_1, ..., X_m@, each carrying its designated 
-set @X_i@, that we us to build the round's public-choice union. This is the @alpha@ 
-of Chapter 3, but using schemas so that each round can instantiate it over fresh 
-atoms. Instantiating the whole repertoire at a round produces the single 'MPEvent' 
-@(Sigma X, X_+)@ for that round, so by the Theorem 3.27 the compiled 
-round is again one multi-pointed event, so it is the same kind of object as 
-each schema's instantiation. The pipeline realises a round by folding all @m@ 
-branches into that one union. The tree realises the same action by enumerating 
-the branches as separate paths.
--}
+-- | The repertoire of possible actions (wrapping a list of schemas)
 newtype Repertoire = Repertoire
     { unRepertoire :: [MPEventSchema]
     }
 
--- | The schemas in a repertoire, in their fixed enumeration order.
+-- | Returns the event schemas contained in a repertoire.
 branchesOf :: Repertoire -> [MPEventSchema]
 branchesOf = unRepertoire
 
--- | Metadata attached to every union atom, used for the pruning scan order 
--- and log messages
+-- | Metadata stored for atoms created by taking the union
 data AtomInfo = AtomInfo
-    { aiRound :: !Int     -- ^ the round that created the atom
-    , aiBlock :: !Int     -- ^ 0 for a choice bit, 1 for a branch atom
-    , aiIdx   :: !Int     -- ^ position within the round, fixing the enumeration
-    , aiName  :: !String  -- ^ display name, for example \"c1\@3\" or \"x\@3\"
-    } deriving stock (Show)  -- this creates a standard Show instance for this
+    { aiRound :: !Int    
+    , aiBlock :: !Int     -- ^ 0 if choice bit, 1 if branch atom
+    , aiIdx   :: !Int     -- ^ index
+    , aiName  :: !String  -- ^ name ("c1@3" for example)
+    } deriving stock (Show) 
 
 
--- | The smallest @k@ with @2^k >= n@, used to compute how many choice bits are 
--- needed to index m branches. 
+-- | The smallest @k@ s.t. @2^k >= n@
+-- To find out the amount of choice bits needed to index m branches
 ceilLog2 :: Int -> Int
-ceilLog2 n = head [ k | k <- [(0 :: Int) ..], 2 ^ k >= n ]  -- total: some k works
--- Examples: ceilLog2 1 = 0, ceilLog2 3 = 2, ceilLog2 4 = 2, ceilLog2 5 = 3.
+ceilLog2 n = head [ k | k <- [(0 :: Int) ..], 2 ^ k >= n ]  
+-- ceilLog2 1 = 0, ceilLog2 3 = 2, ceilLog2 4 = 2, ceilLog2 5 = 3.
 
-{- | The public-choice union Chapter 3, instantiated for round @r@: choice atoms, 
-branch selectors, inactive-branch forcing, and lifted designated events, made
-into one event. Round @r@ has the id block @1000r .. 1000r + 999@: positions 
-@0 .. k-1@ hold the @k@ choice atoms, and the branch atom blocks follow in 
-enumeration order. The layout is identical in every round, only shifted by 1000, 
-so each round is a coherent copy of its predecessor, these are the fresh copies of 
-the iterated union, which is need for both the literal fixpoint and the stabilisation 
-argument .
-
-Besides the event we return the choice atoms, the per-branch atom lists and
-the metadata table, which is needed for plan extraction and the scan order.
--}
+-- | Builds the public-choice union for planning round @r@. 
+-- Combines the event schemas in the repertoire into one 'MPEvent'
 instantiateUnion ::
     [Agent] ->  -- the agents of the planning problem
-    Repertoire ->  --the MP event schemas to fold into one round
-    Int ->  -- the round number @r@, fixing the fresh id block
+    Repertoire ->  --the Repertoire
+    Int ->  -- the round number @r@
     (MPEvent, [Prp], [[Prp]], [(Prp, AtomInfo)]) --the union
 instantiateUnion ags rep r =
     ( MPEvent
         { mpProps = bits ++ concat brAts  -- k bits, then every branch's block
-        , mpLaw   = lawU  -- the big disjunction, built below
-        , mpObs   = obsU  -- everyone sees the bits; whatever branch gives is added on top
+        , mpLaw   = lawU  -- the big disjunction
+        , mpObs   = obsU  -- everyone sees the bits
         , mpPts   = ptsU  -- xi of the union, Lemma 3.26
         }
     , bits
@@ -284,43 +258,39 @@ instantiateUnion ags rep r =
     m = length brs
 
     -- We need k choice bits to distinguish m branches (at least 1, even for m=1, 
-    -- so the layout is always uniform, the forced-constant bit is pruned away immediately).
+    -- so the layout is always uniform).
     k :: Int
     k = max 1 (ceilLog2 m)
 
-    -- the first id this round owns
+    -- the first id of round r
     base :: Int
     base = 1000 * r
 
-    -- The k choice-bit atoms: ids base+0, base+1, ..., base+k-1.
+    -- The k choice-bit atoms
     bits :: [Prp]
     bits = [ P (base + j) | j <- [0 .. k - 1] ]
 
-    -- Running sum of the arities, starting after the k choice bits: the i-th offset
-    -- is where branch (i+1)'s atoms begin, relative to base.
+    -- The i-th offset is where branch (i+1)'s atoms begin, relative to base.
     -- scanl (+) k [a1, a2, ...] = [k, k+a1, k+a1+a2, ...]
     offsets :: [Int]
     offsets = scanl (+) k (map (length . esAtoms) brs)
 
-    -- For each branch b (with its starting offset), allocate consecutive ids
+    -- For each branch b, allocate consecutive ids
     brAts :: [[Prp]]
     brAts =
          -- branch b gets consecutive ids from its offset, one per declared atom name
         [ [ P (base + off + j) | j <- [0 .. length (esAtoms b) - 1] ]
-        -- pair each branch with its offset (extra offset entry ignored)
+        -- pair each branch with its offset
         | (b, off) <- zip brs offsets
         ]
 
     -- The encoding enc(i) from Section 3.2: the bits true in the binary code of branch i.
-    -- Branch i gets code i-1 in LSB-first binary: bit j is set iff floor((i-1)/2^j) is odd.
     -- Example (k=2): branch 1 -> enc 1 = [], branch 2 -> enc 2 = [bits!!0],
     --                branch 3 -> enc 3 = [bits!!1], branch 4 -> enc 4 = [bits!!0, bits!!1]
     enc :: Int -> [Prp]
     enc i = [ bits !! j | j <- [0 .. k - 1], odd ((i - 1) `div` (2 ^ j)) ]
 
-    -- The branch selector of the thesis, "the choice bits encode branch i":
-    -- a full conjunction over all k bits, positive on enc i (@(PrpF c)@) and negated
-    -- (@(Neg (PrpF c))@) everywhere else, so that distinct codes exclude each other.
+    -- The branch selector of the thesis
     codeF :: Int -> Form
     codeF i = Conj
         -- Form version: the true bits of branch i's code ...
@@ -329,15 +299,11 @@ instantiateUnion ags rep r =
         ++ [ Neg (PrpF c) | c <- bits, c `notElem` enc i ]
         )
 
-    -- The same code as a BDD, for use in the designated set BDD, which is purely
-    -- boolean and needs no translation.
+    -- The same code as a BDD, for use in the designated set BDD
     codeB :: Int -> Bdd
     codeB i = boolBddOf (codeF i)
 
-    -- The inactive-branch forcing of Section 3.2: when branch i fires, the atoms of 
-    -- every other branch are forced to be false. Tis makes sure that the vocabulary
-    -- is the same no matter which branch fires, and it prevents unused atoms from 
-    -- doubling the state count.
+    -- The inactive-branch forcing of Section 3.2
     inactF :: Int -> Form
     inactF i = Conj
         -- Form version: negate q ...
@@ -346,15 +312,11 @@ instantiateUnion ags rep r =
         | (j, qs) <- zip [(1 :: Int) ..] brAts, j /= i, q <- qs
         ]
 
-    -- The BDD version of the same inactive padding
+    -- The BDD version of inactF
     inactB :: Int -> Bdd
     inactB i = boolBddOf (inactF i)
 
-    -- The union event law: some branch i fires, meaning that this branch's code holds, 
-    -- its event law holds, and the atoms of every other branch are off.
-    -- Any choice-bit valuation that doesn't correspond to a valid branch code (this 
-    -- can happen when m is not a power of two) does not satisfy any disjunct, so it is automatically 
-    -- excluded.
+    -- The union event law
     lawU :: Form
     lawU = Disj
         -- one disjunct per branch: code /\ branch law /\ padding
@@ -364,9 +326,7 @@ instantiateUnion ags rep r =
       -- brs !! (i-1) is branch i's spec (0-indexed list, 1-indexed branches)
       -- brAts !! (i-1) gives branch i's fresh atoms
 
-    -- The union designated set, following Lemma 3.26: per branch, its selector, its own designation,
-    -- and the forcing. It has the same structure as lawU but as BDDs over V+ only. 
-    -- No bddOf translation is needed because designated sets are propositional.
+    -- The union designated set, following Lemma 3.26
     ptsU :: Bdd
     ptsU = disSet
         -- one disjunct per branch: code /\ designated /\ padding
@@ -375,29 +335,25 @@ instantiateUnion ags rep r =
         | (i, b) <- zip [1 ..] brs
         ]
 
-    -- Observability of the union: 
-    -- Every agent sees all k bits, becaus the branch choice is public. Each agent gets what 
-    -- branch i's observability gives to them (collected across all branches; the agent only 
-    -- actually learns from the branch that fired, but the union encodes all possibilities 
-    -- symbolically).
+    -- Observability of the union
     obsU :: [(Agent, [Prp])]
     obsU =
         [ ( a
           -- for each agent a: all k choice bits, plus ...
           , bits ++ concat
-                 -- ... a's part of branch i's atoms (empty if the branch gives a nothing new)
+                 -- ... a's part of branch i's atoms
                 [ fromMaybe [] (lookup a (esObs b (brAts !! (i - 1))))
                  -- collected across all branches
                 | (i, b) <- zip [1 ..] brs
                 ]
           )
-        -- one entry per agent of the planning problem 
+        -- one entry per agent
         | a <- ags
         ]
 
-    -- Metadata for each union atom, used in pruning scan order and log messages. 
-    -- Choice bit j at round r is named "c(j+1)@r" and is in block 0. Branch b's 
-    -- atom at position (off+j) is named after its declared atom name, tagged "@r".
+    -- Metadata for each union atom
+    -- Choice bit j at round r is "c(j+1)@r" and is in block 0. Branch b's 
+    -- atom at position (off+j) is named after its atom name, with "@r".
     meta :: [(Prp, AtomInfo)]
     meta =
         -- entries for the choice bits
@@ -416,11 +372,10 @@ instantiateUnion ags rep r =
             | (b, qs, off) <- zip3 brs brAts offsets
             ]
 
-{- | Read the branch index from a total satisfying assignment: the
-inverse of the encoding above, summing @2^j@ over the bits that the assignment
-sets, that is, we reconstruct the branch index as 1 + sum_{j : bit_j is true in val} 2^j. 
+{- | Decodes a 1-based branch index from the boolean values of its choice bits.
+
+Bit @j@ contributes @2^j@ when it is true. Missing bits are treated as false.
 -}
--- choice bits and a total assignment to a 1-based branch index
 decodeBranch :: [Prp] -> [(Int, Bool)] -> Int
 decodeBranch bits val = 1 + sum
     [ 2 ^ j
@@ -429,24 +384,15 @@ decodeBranch bits val = 1 + sum
     -- True iff this bit is set in val
     , fromMaybe False (lookup (unP c) val)
     ]
--- fromMaybe False: if the bit is not in val (shouldn't happen with a total 
--- assignment that 'anySatWith' produces), treat it as False (so that it does not 
--- contribute to the sum).
-
 
 
 -- * The rho forms and the four readings
 
-{- | Hat-rho-diamond and hat-rho-box from Chapter 5: the
-diamond quantifies the non-base atoms existentially over the guard and
-translated goal, the box universally over their implication. Read at a
-state s of the base structure, the diamond says that some designated,
-law-abiding run from s ends with the goal formual being true, and the box says
-that every such run does.
-What counts as designated and law-abiding is determined by the guard.
-It is the conjunction of the initial law with every round's designated set
-and translated event law (and pruning has projected it down alongside the 
-structure)
+{- | Constructs the diamond and box rho forms 
+
+* The first component holds when some admissible run reaches the goal.
+* The second component holds when every admissible run reaches the goal.
+
 -}
 -- base vocab, structure, guard, goal formula to (rho_dia, rho_box)
 rhoForms :: [Prp] -> KnowStruct -> Bdd -> Form -> (Bdd, Bdd)
@@ -469,10 +415,9 @@ rhoForms baseV g@(KnS voc _ _) zeta goal =
 
 {- | The four readings of Theorem 3.12: worlds read universally
 or existentially, events by box or diamond. The convention of the thesis is to
-read worlds universally. With this fixed, the box over the events is the 
-conformant reading, where every outcome achieves the goal, and the diamond over 
-the events isthe contingent reading, according to which some outcome achieves
-the goal. These are the strong and weak plans mentioned in the thesis.  
+read worlds universally. Then, the box over the events is the conformant reading, 
+according to which every outcome achieves the goal, and diamond over 
+the events is the contingent reading,  where some outcome achieves the goal.  
 -}
 data Readings = Readings
     { strongAll :: !Bool  -- ^ from every initial state, every run
@@ -481,7 +426,7 @@ data Readings = Readings
     , weakEx    :: !Bool  -- ^ from some initial state, some run
     } deriving stock (Eq, Show)
 
--- | Evaluate all four readings in one go, given xi_S and the two rho forms.
+-- | Evaluate all four readings, given xi_S and the two rho forms.
 readingsFrom :: Bdd -> (Bdd, Bdd) -> Readings
 readingsFrom xiS (rD, rB) = Readings
     { strongAll = imp xiS rB == top  -- strongAll: xi_S -> rho_box is a tautology
@@ -493,12 +438,12 @@ readingsFrom xiS (rD, rB) = Readings
 -- imp a b = (neg a) \/ b; con = conjunction; == top checks validity.
 
 -- * Pruning
-{- | The doubled-vocabulary context of one structure, which we have to compute
-one time, as it is shared by all pruning tests on it: the support of the law, 
-and the law's plain copy under the renaming v -> 2v. We interleave the plain copy 
-(even ids) with the starred copy (odd ids) instead of using two blocks because
-interleaving keeps every relabel map monotone on sorted sources, as is needed 
-by 'relabelSafe'. It also keeps the agreement clause linear as a BDD, in cases 
+{- | The doubled-vocabulary context of one structure, computed only once because
+ it is shared by all pruning tests on it. This is the support of the law and
+ the law's plain copy renamed by v-> 2v. The plain copy (even ids) 
+is interleaved with the starred copy (odd ids) instead of using two blocks because
+interleaving keeps the relabel maps monotone on sources that are sorted. This is needed 
+by 'relabelSafe'. It also keeps the agreement clause linear as a BDD, in the case
 where a block layout would make it exponential.
 -}
 data PruneCtx = PruneCtx
@@ -517,12 +462,12 @@ mkCtx (KnS voc law _) = PruneCtx
 
 {- | Is the atom @q@ prunable, with back and forth required only for the
 given audience (note that this can be the full audience)? 
-Deleting @q@ merges every pair of states that differ only in @q@, and 
-an observer of @q@ does not necessarily gain or lose a distinction by the merge.
+Deleting @q@ merges all states that differ only in @q@, and 
+an observer of @q@ does not necessarily win or lose a distinction by the merge.
 This is what test Psi does (Proposition 5.6), by checking the validity per 
 observer j: whenever a state t and a q-free valuation u' agree on j's remaining
-observables, the extension of u' by t's value of @q@ must itself be a state,
-and @q@ is prunable when Psi_j is valid for every observer j in the audience.  
+observables, the extension of u' by t's value of @q@ is itself a state;
+@q@ is prunable when Psi_j is valid for every observer j in the audience.  
 We decide each Psi_j as one boolean validity over the interleaved doubled 
 vocabulary of 'PruneCtx'.
 
@@ -571,9 +516,8 @@ prunable audience ctx kns@(KnS voc law obs) q =
     thT = restrict law (unP q, True)
     thF = restrict law (unP q, False)
 
-    -- The observables every relevant observer shares, except q itself.
-    -- we can use foldr1 because guard (0) has already failed, so the list of
-    -- observers is non-empty.
+    -- The observables that are shared by the relevant observer (without q)
+    -- use foldr1 because guard (0) fails, so the list of observers is non-empty.
     shared :: [Prp]
     shared = foldr1 intersect [os | (_, os) <- observers] \\ [q]
 
@@ -656,27 +600,26 @@ pruneAtom (KnS voc law obs) q =
 
 -- * The pruned pipeline
 
-{- | The search state after some rounds, following the pruning pipeline of
-Chapter 5: round k updates by the step-k union, conjoins the guard's two
-new factors, then scans and prunes, projecting the guard by every removed
-atom. The invariant is that the guard implies the state law, so the guard
-can never describe anything outside of the state space, and the projected 
-guard still describes exactly the images of the designated, law-abiding runs. 
-Theorem 5.32 then gives that the rho forms of the pruned pair equal those 
-of the unpruned pair for each of their states.
+{- | State of the iterative planning and pruning procedure.
+
+This is the pruning pipeline of Chapter 5: round k updates by the step-k union, 
+conjoins the guard's two new factors, then scans and prunes, projecting the 
+guard by every removed atom. 
+The invariant is that the guard implies the state law, so the guard
+can never describe anything outside of the state space
 -}
 data Pipeline = Pipeline
-    { plBase   :: !KnowStruct         -- ^ the initial structure, kept so candOrder can subtract its vocabulary
+    { plBase   :: !KnowStruct         -- ^ the initial structure
     , plStruct :: !KnowStruct         -- ^ G-hat, current and already pruned
     , plGuard  :: !Bdd                -- ^ zeta-hat, current, already projected
     , plRound  :: !Int                -- ^ how many rounds have been applied
     , plMeta   :: ![(Prp, AtomInfo)]  -- ^ metadata of all union atoms so far
-    , plLog    :: ![String]           -- ^ the trace, newest line first
-    , plPeak   :: !Int                -- ^ the largest law BDD seen
+    , plLog    :: ![String]           -- ^ the trace with the newest line first
+    , plPeak   :: !Int                -- ^ the largest law BDD so far
     }
 
--- | Round 0: no actions yet, so the structure is the initial one and the
--- guard is its state law.
+-- | Round 0: no actions yet, structure is the initial strucutre, guard is the 
+-- state law
 initPipeline :: KnowStruct -> Pipeline
 initPipeline f = Pipeline
     { plBase   = f
@@ -689,27 +632,25 @@ initPipeline f = Pipeline
     }
 
 -- | infoOf looks up the metadata for an atom q in the pipeline's metadata table. 
--- If no metadata exists, it returns a fallback AtomInfo instead of failing.
+-- If no metadata exists, it returns a fallback AtomInfo
 infoOf :: Pipeline -> Prp -> AtomInfo
 infoOf pl q =
     fromMaybe
-        (AtomInfo (-1) 9 0 (show q)) -- round -1, block 9 sorts after everything important; show q as the name
+        (AtomInfo (-1) 9 0 (show q)) -- round -1, block 9 as fallback
         (lookup q (plMeta pl))
 
+{- | Ordering used to scan removable event atoms.
 
-{- | The scan order. Candidates are the event atoms only, scanned by
-creation round, newest round first. Within a round, choice bits before branch
-atoms, in the fixed enumeration. Survivors from earlier rounds afterwards,
-most recent first. When a later round reintroduces information an earlier
-round already added, the later atoms are thereby the duplicates, and removing
-the later copies instead of their predecessors is why we can do consecutive
-rounds, after pruning, to produce literally identical structures. This
-literal equality is the convergence certificate, so the order is part of the
-algorithm. FOr the stabilisation argument we need every round to run the same 
-tests in the same relative positions. The key in this method is preserved
- by the renaming that shifts rounds.
+Candidates are only the event atoms. They are ordered by creation round, newer
+rounds scanned first. Within a round, choice atoms are scanned before branch atoms, both
+in their fixed enumeration order. Remaining atoms from earlier rounds follow,
+again from newest to oldest.
+
+This order removes later duplicate information before earlier copies. It is
+therefore required for successive pruned rounds to become literally equal at a
+fixed point, and for corresponding atoms to be tested consistently across
+rounds.
 -}
---candOrder produces the list of non-base atoms in the order they should be considered for pruning.
 candOrder :: Pipeline -> [Prp]
 candOrder pl = sortBy (comparing key) cands
   where
@@ -719,17 +660,14 @@ candOrder pl = sortBy (comparing key) cands
     -- Round descending (thats why the negation); then bits before branch atoms;
     -- then position within the round
     key :: Prp -> (Int, Int, Int)
-    -- negate (aiRound ai): later/higher rounds come first (negate to get negative numbers)
-    -- aiBlock ai: within a round, lower-numbered blocks come first
-    -- aiIdx ai: Within the same block, lower positions come first
     key q = (negate (aiRound ai), aiBlock ai, aiIdx ai)
       where
         ai :: AtomInfo
         ai = infoOf pl q
 
-{- | stepPipeline performs one dynamic-update round of the pipeline: it instantiates 
-the repertoire as a union event, applies that event to the current structure, updates 
-the guard and bookkeeping, logs the unpruned result, and optionally runs pruning.
+{- | Performs one planning round.
+instantiates the repertoire as a union event, applies that event to the current structure,
+updates the guard, logs unpruned result, optionally runs pruning
 -}
 stepPipeline :: Bool ->  --whether to prune after the round
     [Agent] ->  -- the audience for the scan
@@ -738,7 +676,7 @@ stepPipeline :: Bool ->  --whether to prune after the round
     Pipeline ->
     Pipeline
 stepPipeline doPrune pruneAgs ags rep pl
--- the returned pipeline is extended, if pruning is disabled ...
+-- the returned pipeline is extended, if pruning is disabled 
     | doPrune = pruneToFixpoint pruneAgs extended
     -- the result of repeatedly pruning extended until no more candidates can be removed, 
     -- if pruning is enabled
@@ -767,21 +705,16 @@ stepPipeline doPrune pruneAgs ags rep pl
         { plStruct = g'  --Store the expanded knowledge structure
         -- Guard_r = Guard_{r-1} /\ mpPts(u) /\ lawB
         , plGuard  = con (plGuard pl) (con (mpPts u) lawB)  -- the guard recursion
-        -- so the guard retains exactly those expanded valuations that 
-        -- 1. were already allowed by prior rounds
-        -- 2. belong to the event's designated set (mpPts u), and
-        -- 3. satisfy this round's translated event law
         , plRound  = r  --	Record that one further round has happened
-        , plMeta   = meta ++ plMeta pl  -- 	Add metadata for fresh atoms; ids are globally fresh, no shadowing
+        , plMeta   = meta ++ plMeta pl 
         , plPeak   = max (plPeak pl) (sizeOf (lawOf g'))  --Maintain the greatest observed law-BDD size
         -- max of the previous peak size and the current unpruned structure law's BDD size
-        -- Important: this happens before optional pruning. Thus plPeak records the peak intermediate BDD 
-        -- cost of constructing a round instead of only measuring the pruned result
+        -- Important: this is before optional pruning
         , plLog    = logLine : plLog pl  --Prepend this round's log entry
 
         }
 
-    -- vocab and law size of the fresh, still unpruned round
+    -- vocab and law size of the fresh, unpruned round
     logLine :: String
     logLine = "round " ++ show r ++ ": vocab "
         ++ show (length (vocabOf g')) ++ ", law size "
@@ -797,19 +730,17 @@ pruneToFixpoint audience pl
     -- under the current structure, this is the fixed point for the given scan rule and audience.
     | otherwise = pl'
   where
-    -- one iteration:
     (pl', changed) = prunePass audience pl
-    -- runs one full candidate scan and returns:
-    -- pl': the possibly pruned pipeline after that scan
-    -- changed :: Bool: whether the scan removed at least one atom
 
 
-{- | One left-to-right pass over the candidates, with greedy pruning. 
-Whenever it finds an atom that is currently safe to prune, it removes that atom, 
-rebuilds the pruning context for the smaller structure, and continues scanning 
-the remaining candidates.
+{- | Performs one left-to-right greedy pruning pass.
+
+For each candidate atom, the function tests whether it can be removed from the
+current structure. If so, it removes it, rebuilds the pruning context,
+and continues with the remaining candidates.
+
+Returns the updated pipeline and whether at least one atom was removed.
 -}
--- returns both the resulting pipeline and a flag saying whether anything was removed:
 prunePass :: [Agent] -> Pipeline -> (Pipeline, Bool)
 -- pl0: the initial pipeline
 -- mkCtx (plStruct pl0): a PruneCtx computed from the initial structure
@@ -833,8 +764,6 @@ prunePass audience pl0 = go pl0 (mkCtx (plStruct pl0)) False (candOrder pl0)
         -- If q is prunable
         g' :: KnowStruct
         g' = pruneAtom (plStruct pl) q
-        -- This removes q from the structure: delete it from the vocabulary;
-        -- existentially quantify it out of the state law; remove it from every agent's observable vocabulary. 
 
         -- then update the pipeline consistently
         pl' :: Pipeline
@@ -844,19 +773,13 @@ prunePass audience pl0 = go pl0 (mkCtx (plStruct pl0)) False (candOrder pl0)
             , plPeak   = max (plPeak pl) (sizeOf (lawOf g'))   -- 	Preserve the largest BDD-law size encountered
             , plLog    = ("  pruned " ++ aiName (infoOf pl q)) : plLog pl  --Add a readable pruning log entry
             }
-        -- q must be projected from both the structure law and the pipeline guard. 
-        -- Otherwise, plGuard would still mention an atom no longer present in the current vocabulary.
 
-{- | The literal fixpoint from Definition 5.35.
-The pipeline stabilises when consecutive stages have the same vocabulary and
-observables, equivalent laws, and equivalent guards, and on BDDs both
-equivalences are equality of canonical forms, which is what we compare.
-We know by Theorem 5.36 that the fixpoint persists. The round map is
-deterministic and equivariant under the renaming that shifts round ids by
-one, so if applying it once changes nothing, every further application is a
-renamed copy of its predecessor, and the accumulated diamond over the base
-vocabulary never changes again. A goal that is not reached at the fixpoint is
-unreachable at every horizon.
+
+{- | Tests whether two pipeline states are equal for the purpose of detecting
+a literal fixed point (Definition 5.35).
+The states must have the same vocabulary, state law, observability relation,
+and guard. BDD equality is used directly because BDDs have canonical forms.
+Observability is compared after sorting agents and their observable atoms.
 -}
 samePipeline :: Pipeline -> Pipeline -> Bool
 samePipeline a b =
@@ -1061,15 +984,15 @@ linkCert agsB v (g1@(KnS voc1 _ _), z1) (g2@(KnS voc2 _ _), z2) =
 
 -- * Variants, outcomes, results
 
--- | The four search methods as described above
+-- | The four search variants
 data Variant
-    = VTree   -- ^ the naive view: one natural-update sequence per path
-    | VUnion  -- ^ the composed view, without pruning
-    | VPrune  -- ^ full pruning, with the literal fixpoint
-    | VFull   -- ^ audience pruning, with the link certificate
+    = VTree   -- ^ tree
+    | VUnion  -- ^ union, no pruning
+    | VPrune  -- ^ pruning, literal fp
+    | VFull   -- ^ pruning relative to audience, link certificate
     deriving stock (Eq, Show)
 
--- | The long names used in the report headers
+-- | The long names used for the reports
 variantName :: Variant -> String
 variantName VTree  = "tree: one structure per action sequence"
 variantName VUnion = "union: composed pipeline, no pruning"
@@ -1077,8 +1000,7 @@ variantName VPrune = "prune: union + pruning (full Psi, literal fixpoint)"
 variantName VFull  = "full: union + audience pruning + link certificate"
 
 
--- | The variants by their command-line names. All four are always compiled 
--- a run executes exactly those that are chosen
+-- | The command-line names of the variants
 variantsByName :: [(String, Variant)]
 variantsByName =
     [ ("tree",  VTree)
@@ -1087,69 +1009,52 @@ variantsByName =
     , ("full",  VFull)
     ]
 
-{- | A plan, one entry per round: the name of the action that fires and, per
-declared event atom of that action, the value the witness gives it. 
+{- | A plan that was extracted from a satisfying assignment.
+
+Each entry represents one planning round. It contains the selected action's
+name and the truth values that are assigned to the  event atoms of that action
 -}
 type PlanTrace = [(String, [(String, Bool)])]
--- This is a type alias for a list with one entry per planning round:
--- [(actionName, atomAssignments)]
--- Each entry contains:
---  String: the action name chosen/fired that round; [(String, Bool)]: truth 
--- assignments for that action's declared fresh event atoms.
--- Example: [("announce", [("p", True), ("secret", False)]), ("inspect",  [("found", True)])]
--- Round 1 executes "announce", with event atom p true and secret false.
--- Round 2 executes "inspect", with found true.
 
--- | How a search ended.
+
+-- | Result of a planning search.
 data Outcome
     = PlanFound !Int ![(State, Maybe PlanTrace, Bool)]
-      -- ^ success at the horizon, with per initial state the extracted plan
-      -- and the verdict of the independent replay
-      -- (State, Maybe PlanTrace, Bool) represents: One initial state considered
-      -- by the search, Just trace if a plan was extracted and Nothing if not trace is
-      -- available for that state; whether independent replay validated the extr. plan
+      -- ^ A plan was found at this horizon. Each entry contains an initial
+      -- state, an optional extracted plan, and whether independent replay
+      -- validated that plan.
     | NoPlan !Int !String
-      -- ^ A certificate proved no plan is possible, at a given round (round + explanation/
-      --cert label, e.g. NoPlan 4 "strongAll certificate") 
+      -- ^ No plan exists at this horizon; the string gives the certificate
     | Exhausted !Int
-      -- ^ The search reached its horizon limit without a positive or negative verdict
+      -- ^ The horizon limit was reached without finding a plan or proving
+      -- its absence.
     deriving stock (Show)
 
--- | What every search variant returns, in similar shapes so we can time
--- and print them uniform
+-- | Result returned by each search variant.
 data SearchResult = SearchResult
     { srOutcome :: !Outcome
-    , srLog     :: ![String]           -- ^ the log, in chronological order
-    , srHist    :: ![(Int, Readings)]  -- ^ the four readings, per horizon
-    , srSizes   :: ![(Int, Int, Int)]  -- ^ per horizon: vocabulary, law size
-    , srPeak    :: !Int                -- ^ the largest law BDD seen 
+    , srLog     :: ![String]           -- ^ log in chronological order
+    , srHist    :: ![(Int, Readings)]  -- ^ readings recorded at each horizon
+    , srSizes   :: ![(Int, Int, Int)]  -- ^ Per-horizon size data: horizon, vocabulary size, and state-law BDD siz
+    , srPeak    :: !Int                -- ^ Largest law BDD encountered during the search.
     }
 
 
 -- * The pipeline search
 
-{- | The search when using the composed version. THis is used by union, 
-prune and full. For each horizon, the two rho forms are computed, and 
-the success criterion is the accumulated weak reading: xi_S implies the 
-disjunction of the hatted diamonds collected so far, which is the bounded 
-evaluation and the reading that both certificates certify.  
-The skip-augmented union is not needed for the at-most reading because, 
-as noted in the proof of Theorem 5.32, the pipeline runs on the exact 
-iterates and the horizons accumulate.
-Note that the criterion lets different initial states succeed at different
-horizons, so the per-horizon weakAll flag can read false on every line of a
-successful run.
+{- | Searches for a plan using the composed public-choice construction.
 
-We certify impossibility in two ways. The literal fixpoint compares
-consecutive stages as raw objects and is always tried first. We attempt
-to find a link only in the full variant, and only after the following necessary
-condition: a link between consecutive stages forces the rho forms of the
-current goal to agree at these two horizons, so when the forms we have
-already computed differ, the refinement is skipped, because the certificate
-provably cannot exist. The attempts follow the geometric schedule 1, 2, 4, 8 ..., 
-which bounds the total cost of failed refinements by a constant
-factor of the largest single attempt, and postpones finding a successful 
-certificate by at most a factor of two in the round number.
+This implementation is used by the union, prune, and full variants. At each
+horizon, it computes the rho forms of the current pipeline state and evaluates
+the accumulated weak reading: every designated initial state must satisfy the
+disjunction of the diamond rho forms obtained up to that horizon.
+
+The search first checks if there is a literal fixed point between consecutive pipeline
+states. In the full variant, it additionally tries to find a link.
+ A link search is only attempted when the rho forms at the current and
+previous horizons agree, because agreement is necessary for it.
+
+Link search attempts are tried following the schedule @1, 2, 4, 8, ...@. 
 -}
 searchPipeline :: Variant ->  --'VUnion', 'VPrune' or 'VFull' 
     Int ->  -- the horizon cap
@@ -1341,7 +1246,8 @@ searchTree maxR ags f bigS rep goal =
     -- [TreeNode] is the frontier: all nodes representing action sequences of length d
     -- [(TreeNode, Bdd)] is every node encountered so far, paired with its diamond BDD
     -- [Bdd] is the per-depth disjoined diamonds
-    go :: Int -> [TreeNode] -> [(TreeNode, Bdd)]  -> [Bdd] -> [(Int, Readings)] -> [(Int, Int, Int)] -> [String] -> SearchResult
+    go :: Int -> [TreeNode] -> [(TreeNode, Bdd)]  -> [Bdd] -> [(Int, Readings)] 
+            -> [(Int, Int, Int)] -> [String] -> SearchResult
     -- dias: One disjoined diamond BDD per depth; hist: per-depth strong/weak readings;
     -- sizes: per-depth max vocab/law-BDD sizes; logs: per-depth textual log entries
     go d frontier found dias hist sizes logs
@@ -1379,10 +1285,8 @@ searchTree maxR ags f bigS rep goal =
         rD, rB :: Bdd
         rD = disSet [ dB | (_, (dB, _)) <- pairs ]   -- per-depth diamond
         rB = disSet [ bB | (_, (_, bB)) <- pairs ]   -- disjoined boxes, info only
-        -- rD_d + \/_{node at depth d} rho^dia_node. This says a a plan of exactly this
-        -- depth, along at least one tree path, works from the given base state.
+        -- rD_d + \/_{node at depth d} rho^dia_node. 
 
-        -- every node we have ever seen, with its diamond, needed for plan extraction 
         found' :: [(TreeNode, Bdd)]
         found' = found ++ [ (nd, dB) | (nd, (dB, _)) <- pairs ]
 
@@ -1392,7 +1296,7 @@ searchTree maxR ags f bigS rep goal =
         hist' :: [(Int, Readings)]
         hist' = hist ++ [(d, readingsFrom xiS (rD, rB))]
 
-        -- frontier-wide maxima, for log line and summary table
+        -- maxima, for log and summary table
         vmax, lmax :: Int
         vmax = maximum [ length (vocabOf (tnStruct nd)) | nd <- frontier ]
         lmax = maximum [ sizeOf (lawOf (tnStruct nd)) | nd <- frontier ]
@@ -1407,14 +1311,14 @@ searchTree maxR ags f bigS rep goal =
                 ++ ", max law size " ++ show lmax
             ]
 
-        -- The same accumulated weak criterion as in the pipeline search.
+        -- weak
         reached :: Bool
         reached = imp xiS (disSet dias') == top
 
         peak :: Int
         peak = maximum [ l | (_, _, l) <- sizes' ]  -- non-empty: depth 0 is in
 
-    -- all one-step extensions of a node: one child per branch of the action
+    -- for every node all their neighbors reachable in 1 step
     expand :: Int -> TreeNode -> [TreeNode]
     expand r nd =
         [ TreeNode
@@ -1465,18 +1369,18 @@ searchTree maxR ags f bigS rep goal =
 
 -- * Plan extraction and the independent check
 
-{- | Rebuild the unpruned pipeline to horizon @j@ and read a witness off of a
-satisfying assignment: the choice bits of each round name the action, the
-branch atoms give the event values. We extract on the unpruned copy because
-the scan might have deleted the choice bits.
+{- | Extracts a plan witness at horizon @j@.
+
+The function rebuilds the unpruned pipeline through horizon @j@ and obtains a
+satisfying assignment for the selected initial state. It decodes each round's
+choice bits as an action and its branch atoms as event-atom values.
+
+this uses the unpruned pipeline, because the pruning might delete the 
+atoms that are needed for decoding.
 -}
--- KnowStruct is the initial structure
--- Int is the horizon @j@ at which the diamond held
--- State is the initial state to extract for
 extractTrace :: [Agent] -> KnowStruct -> Repertoire -> Form -> Int -> State
              -> Maybe PlanTrace
 extractTrace _ _ _ _ 0 _ = Just []  -- If the required horizon is 0, it returns an empty plan
--- if there is a witness, decode it round by round; a Nothing just propagates
 extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
 -- ^ If mwit= Nothing, return Nothing. If mwit= Just v, decode each saved round using the 
 -- satisfying assignment v, producing Just trace
@@ -1494,7 +1398,7 @@ extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
     step (g, z, acc) r = (g', con z (con (mpPts u) lawB), acc ++ [(bits, brAts)])
       where
         (u, bits, brAts, _) = instantiateUnion ags rep r  -- meta not needed here
-        -- ^ creates the round’s union event and receives: u: the constructed union MPEvent;
+        -- ^ creates the round’s union event and gets: u: the constructed union MPEvent;
         -- bits: fresh choice-bit propositions for branch selection; brAts: the fresh 
         -- atom allocation for each repertoire branch; _: metadata
         (g', lawB) = applyEvent g u
@@ -1530,14 +1434,14 @@ extractTrace ags f rep goal j s = fmap (\v -> map (dec v) rounds) mwit
         qs :: [Prp]
         qs = brAts !! (i - 1)  -- that branch's fresh atoms in this round
 
-{- | The independent check: the plan is replayed as sequential single-pointed
-updates, without any union and without any bits, and the goal is evaluated by
-SMCDEL's model checker. THe replay ids live in the block 1000r + 500 onwards, 
-which is disjoint from everything that either search would allocate.
+{- | Independently validates an extracted plan.
+
+The plan is replayed as sequential single-pointed event update
+ The goal is then evaluated using SMCDEL
+
+Replay atoms for round @r@ use ids starting at @1000 * r + 500@, which
+are disjoint from the atoms that are allocated by the search constructions.
 -}
--- [Agent] is unused, as the replay reads the agent off of the structure
--- KnowStruct is the initial structure
--- State is the initial state
 verifyTrace :: [Agent] -> Repertoire -> Form -> KnowStruct -> State
             -> PlanTrace -> Bool
 verifyTrace _ags rep goal = go 1  -- round counter starts at 1, like the search
@@ -1573,8 +1477,10 @@ verifyTrace _ags rep goal = go 1  -- round counter starts at 1, like the search
 
 -- * Printing
 
--- | One line per plan: the action names joined by semicolons, each followed
--- by its event values, e.g. "senseP x=1 ; tellQ x=0".
+-- | Renders a plan as semicolon-separated action instances.
+--
+-- Each action is followed by the truth values of its event atoms:
+-- @\"senseP x=1 ; tellQ x=0\"@.
 showTrace :: PlanTrace -> String
 showTrace [] = "(empty plan)"
 showTrace tr = intercalate " ; "
@@ -1582,22 +1488,21 @@ showTrace tr = intercalate " ; "
     | (nm, ev) <- tr
     ]
 
--- | The one-line result for the summary table.
+-- | Renders an outcome for a one-line summary.
 verdictOf :: Outcome -> String
 verdictOf (PlanFound k _) = "plan found at horizon " ++ show k
 verdictOf (NoPlan k why)  = "no plan (" ++ why ++ ", round " ++ show k ++ ")"
 verdictOf (Exhausted k)   = "undecided up to horizon " ++ show k
 
--- | Whether every extracted plan passed the independent replay; extraction
--- failures count as failures.
+
+-- | Reports if all extracted plans passed the independent replay
 verifiedOf :: Outcome -> String
 verifiedOf (PlanFound _ ps)
     | and [ ok | (_, _, ok) <- ps ] = "replay PASS"
     | otherwise = "replay FAIL"
 verifiedOf _ = ""
 
--- | The per-cell report: the log and the per-horizon readings,
--- then the outcome, with one line per initial state on success.
+-- | Renders the result of one search configuration.
 renderCell :: Bool -> SearchResult -> String
 renderCell verbose sr = unlines (logLines ++ histLines ++ outLines)
   where
@@ -1606,7 +1511,6 @@ renderCell verbose sr = unlines (logLines ++ histLines ++ outLines)
         | verbose = map ("  " ++) (srLog sr)  -- indent under the banner
         | otherwise = []
 
-    -- one line per horizon with all four readings spelled out
     histLines :: [String]
     histLines
         | verbose =
@@ -1764,7 +1668,7 @@ parseArgs = foldl' step defaultOptions   -- fold the args into the record
         (error ("unknown variant " ++ show s ++ "; use tree, union, prune, full"))
         (lookup s variantsByName)
 
--- | Splits a string wherever a chosen character occurs -- // MG: but you are allowed to use more than "base", you need SMCDEL and HasCacBDD anyway?
+-- | Splits a string wherever a chosen character occurs
 splitOn :: Char -> String -> [String]
 splitOn c s = case break (== c) s of
     (piece, [])       -> [piece]  -- no separator left: this was the last piece
