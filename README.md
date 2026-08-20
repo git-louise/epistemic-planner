@@ -2,7 +2,7 @@
 
 A symbolic epistemic planner for [Dynamic Epistemic Logic](https://plato.stanford.edu/entries/dynamic-epistemic), built on the model checker [SMCDEL](https://github.com/jrclogic/SMCDEL).
 
-Given a knowledge structure, a finite repertoire of epistemic actions, and a goal formula, the program searches for seauences of actions after which the goal holds. Where no such sequence exists it tries to certify this, instead of giving up at some depth. Every plan that is found is re-executed along an independent single-pointed code path and checked with SMCDEL. The verdict of the replay is printed next to the plan.
+Given a knowledge structure, a finite repertoire of epistemic actions, and a goal formula, the program searches for sequences of actions after which the goal holds. Where no such sequence exists it tries to certify this, instead of giving up at some depth. Every plan that is found is re-executed along an independent single-pointed code path and checked with SMCDEL. The verdict of the replay is printed next to the plan.
 
 ## Basic usage
 
@@ -24,7 +24,7 @@ Given a knowledge structure, a finite repertoire of epistemic actions, and a goa
         from [1]: peek x=0  [replay: PASS]
         from [0,1]: peek x=1  [replay: PASS]
 ```
-    The round lines report the vocabulary and law size before the scan, then what the scan removed. The horizon lines give all four readings of the current stage: worlds universally or existentially, events by box or by diamond. The success criterion is the accumulated weak reading, so on instances with several initial states the per-horizon `weakAll` flag can read `False` on every line of a successful run. A certified impossibility looks like this instead:
+The round lines report the vocabulary and law size before the scan, then what the scan removed. The horizon lines give all four readings of the current stage: worlds universally or existentially, events by box or by diamond. The success criterion is the accumulated weak reading, so on instances with several initial states the per-horizon `weakAll` flag can read `False` on every line of a successful run. A certified impossibility looks like this instead:
 
 ```
     NO PLAN EXISTS (certified by link certificate at round 1)
@@ -40,7 +40,7 @@ Given a knowledge structure, a finite repertoire of epistemic actions, and a goa
 
 ## Instances
 
-All instances continue the running example of the thesis: Johan may or may not have decided to throw a surprise party, and Alice, Bob and Charlie would like to find out.
+All instances in the following table continue the running example of the thesis: Johan may or may not have decided to throw a surprise party, and Alice, Bob and Charlie would like to find out.
 
 | name     | story                                                                               | verdict |
 |----------|-------------------------------------------------------------------------------------|---------|
@@ -53,7 +53,7 @@ All instances continue the running example of the thesis: Johan may or may not h
 | `tell`   | `askB` plus a text that forwards only the answer to one of the questions to Bob     | no plan; only the link certificate stops |
 | `askAll` | one compound question of arity 3, goal about Bob                                    | no plan; later copies are law-forced duplicates, so `prune` already stops |
 
-The scaled families are `muddyN` (the muddy children as a planning problem, with all `N` children muddy; the plan is the father's announcement followed by rounds of silence), `askN` (one private question per detail, plan at horizon `N`) and `askbN` (the same repertoire with a goal about Bob, certifiably impossible). So `muddy4` or `ask3` are also valid instance names.
+Additionally, there are the scaled families `muddyN` (the muddy children as a planning problem, with all `N` children muddy; the plan is the father's announcement followed by rounds of silence), `askN` (one private question per detail, plan at horizon `N`) and `askbN` (the same repertoire with a goal about Bob, certifiably impossible). So `muddy4` or `ask3` are also valid instance names.
 
 ## Search variants
 
