@@ -35,7 +35,7 @@ The lines starting with `round` give the size of vocabulary and of the law befor
 ```
     stack run epistemic-planner -- [EXAMPLE ...] [VARIANT ...] [OPTION ...]
 ```
-   Where the examples, variants and options themselves can be given in any order and will then run in the given order. At least one variant must be given to the tool, either as a bare word (tree, union, prune, or full) or using the option `--variants=`. 
+   where the examples, variants and options themselves can be given in any order and will then run in the given order. At least one variant must be given to the tool, either as a bare word (tree, union, prune, or full) or using the option `--variants=`. 
 
 
 ## Examples
