@@ -1,16 +1,16 @@
 # epistemic-planner
 
-A symbolic epistemic planner for [Dynamic Epistemic Logic](https://plato.stanford.edu/entries/dynamic-epistemic), built on the model checker [SMCDEL](https://github.com/jrclogic/SMCDEL).
+A symbolic epistemic planning tool for [Dynamic Epistemic Logic](https://plato.stanford.edu/entries/dynamic-epistemic), built on [SMCDEL](https://github.com/jrclogic/SMCDEL).
 
-Given a knowledge structure, a finite repertoire of epistemic actions, and a goal formula, the program searches for sequences of actions after which the goal holds. Where no such sequence exists it tries to certify this, instead of giving up at some depth. Every plan that is found is re-executed along an independent single-pointed code path and checked with SMCDEL. The verdict of the replay is printed next to the plan.
+Given a knowledge structure, a finite repertoire of epistemic actions, and a goal formula, this tool searches for action sequences after which the goal formula holds. If it cannot find such a sequence the tool tries to certify this. If a plan is found, the tool re-executes it along an independent single-pointed path. It then uses SMCDEL to check if the goal formula holds. The result of this replay is printed next to the found plan.
 
 ## Basic usage
 
-1) Use *stack* from https://www.stackage.org
+1) Use *stack* (https://www.stackage.org)
 
-- `stack build` will build an executable `epistemic-planner`, and `stack install` copies it into `~/.local/bin`.
+- `stack build` builds an executable `epistemic-planner` instance, `stack install` copies this instance to `~/.local/bin`.
 
-2) Pick an instance and at least one search variant. Run `stack run epistemic-planner -- peekA prune --max=3` resulting in:
+2) Choose at least one example and at least one search mode. For example, you could run `stack run epistemic-planner -- peekA prune --max=3`, which results in:
 
 ```
     ==== peekA (horizon cap 3, timeout 60s) ====
@@ -24,63 +24,66 @@ Given a knowledge structure, a finite repertoire of epistemic actions, and a goa
         from [1]: peek x=0  [replay: PASS]
         from [0,1]: peek x=1  [replay: PASS]
 ```
-The round lines report the vocabulary and law size before the scan, then what the scan removed. The horizon lines give all four readings of the current stage: worlds universally or existentially, events by box or by diamond. The success criterion is the accumulated weak reading, so on instances with several initial states the per-horizon `weakAll` flag can read `False` on every line of a successful run. A certified impossibility looks like this instead:
+The lines starting with `round` give the size of vocabulary and of the law before a pruning scan starts. The next line then shows what the scan has removed. The lines starting with `horizon` print the results of evaluating the four readings at the current stage, with the worlds read universally or existentially, and the events read by box or by diamond. The success criterion in this tool is given in the accumulated weak reading, this means that if instances have several initial states the per-horizon flag `weakAll` can be `False` on every line, but the run is still successful. If the tool finds a certificate for impossibility, it will instead print:
 
 ```
     NO PLAN EXISTS (certified by link certificate at round 1)
 ```
 
-3) The general form is
+3) The general form of an input to the tool is
 
 ```
-    stack run epistemic-planner -- [INSTANCE ...] [VARIANT ...] [OPTION ...]
+    stack run epistemic-planner -- [EXAMPLE ...] [VARIANT ...] [OPTION ...]
 ```
-   Instances, variants and options themselves can be mixed in any order and run in the given order. At least one variant must be named, either as a bare word or via `--variants=`. 
+   Where the examples, variants and options themselves can be given in any order and will then run in the given order. At least one variant must be given to the tool, either as a bare word (tree, union, prune, or full) or using the option `--variants=`. 
 
 
-## Instances
+## Examples
 
-All instances in the following table continue the running example of the thesis: Johan may or may not have decided to throw a surprise party, and Alice, Bob and Charlie would like to find out.
+All the examples given in the following table continue the running example of the thesis: Johan may or may not have decided to throw a surprise party; Alice, Bob and Charlie want to find out.
 
 | name     | story                                                                               | verdict |
 |----------|-------------------------------------------------------------------------------------|---------|
-| `peekA`  | Alice peeks at the planner; does she learn whether the party is on?                 | plan at horizon 1 |
-| `peekB`  | the same repertoire, but the goal is about Bob, who never sees a copy               | no plan; `prune` stops at the literal fixpoint |
-| `share`  | Alice or Bob peeks; the goal is about Alice                                         | plan at horizon 1, weak but not strong |
-| `relay`  | a peek, then a reveal whose event law is modal                                      | plan at horizon 2 |
-| `askA`   | two private questions from Alice; she should learn both details                     | plan at horizon 2 |
-| `askB`   | the same questions, but the goal is about Bob                                       | no plan; audience pruning stops at round 0 |
-| `tell`   | `askB` plus a text that forwards only the answer to one of the questions to Bob     | no plan; only the link certificate stops |
-| `askAll` | one compound question of arity 3, goal about Bob                                    | no plan; later copies are law-forced duplicates, so `prune` already stops |
+| `peekA`  | Alice looks at the planner, the goal is about Alice's knowledge afterwards          | plan found at horizon 1 |
+| `peekB`  | Same as `peekA`, but with a goal about Bob's knowledge                              | no plan was found; `prune` stops at the literal fixpoint |
+| `share`  | Alice or Bob peeks, the goal is about Alice's knowledge                             | plan found at horizon 1 |
+| `relay`  | A peek; A reveal action has a modal event law                                       | plan found at horizon 2 |
+| `askA`   | Alice asks two private questions, the goal is about her knowledge afterwards        | plan found at horizon 2 |
+| `askB`   | Same as `askA` but with a goal about Bob's knowledge                                | no plan was found; audience pruning stops the search at round 0 |
+| `tell`   | `askB`; a text that forwards the answer to one of the questions to Bob              | no plan was found; the link certificate stops the search |
+| `askAll` | A question about three details, the goal is about Bob's knowledge                   | no plan was found; `prune` stops the search |
 
-Additionally, there are the scaled families `muddyN` (the muddy children as a planning problem, with all `N` children muddy; the plan is the father's announcement followed by rounds of silence), `askN` (one private question per detail, plan at horizon `N`) and `askbN` (the same repertoire with a goal about Bob, certifiably impossible). So `muddy4` or `ask3` are also valid instance names.
+Additionally, there are the following scaled families of examples: `muddyN` (the Muddy Children Puzzle as a planning problem; here, all `N` children are muddy initially; the plan is the announcement of the father followed by rounds of silence), `askN` (Alice asks one private question for each of the `N` party details, the goal is about her knowledge afterwards; a plan can be found at horizon `N`), and `askbN` (same as `askN` but with a goal about Bob's knowledge; no plan can be found, but a certificate of impossibility is given). Names like `muddy4` or `ask3` can therefore also be used as input.
 
-## Search variants
+## Variants
 
-The same question is decided in four ways, so that run times, sizes and certificates can be compared on identical inputs.
+The same input problem can be solved using four different search variants (`modes`). We use this to compare their run times, sizes and certificates on identical inputs.
 
-- `tree` is the naive view: one structure and one guard per action sequence, so `m^d` structures at depth `d`. It can find plans and it can run out of horizon, but it can never certify impossibility.
+- `tree`, corresponds to the naïve approach. The search tree is branched over the action sequences: one structure and guards per structure are generated for each action sequence. At depth `d`, this results in `m^d` structures. A plan can be found or reported not found for the given horizon, but this mode cannot be used to prove that no plan exists.
 
-- `union` is the composed view of Chapter 3: one structure per horizon, built by the public-choice union, without pruning. The vocabulary grows with every round, so a literal fixpoint can never appear.
+- `union` constructs one structure per horizon. It does not prune atoms. Since the vocabulary increases with every round, `union` cannot be used to detect a literal fixpoint.
 
-- `prune` adds the full Psi scan of Chapter 5 after every round and uses the literal fixpoint as a convergence certificate.
+- `prune` uses the composed public-choice construction that is used in `union` and pruning. This mode executes the full Psi scan of Chapter 5 after every round. It can detect literal fixpoints and prove that no further application of any action can affect the evaluation of the goal formula.
 
-- `full` prunes relative to the audience of the goal and the event laws, and additionally searches for the bisimulation link certificate of Appendix A, with the agreement precheck and the geometric schedule.
+- `full` uses the composed public-choice construction and prunes relativized to the agents that are mentioned in the goal formula and the event laws. This mode also searches for a bisimulation link using the geometric schedule of Appendix A, after performing the agreement precheck described there.
 
 ## Options
 
-- `--max=K` sets the horizon cap; the search gives up after `K` rounds (default 10).
-- `--timeout=S` sets a wall-clock limit in seconds per instance-and-variant cell (default 60). The `cpu (s)` column of the summary reports CPU time.
-- `--variants=v1,v2` selects variants by a comma-separated list. These are appended to any variants named as bare words, and duplicates are dropped.
-- `--csv=FILE` additionally writes the summary table to `FILE`.
-- `--quiet` suppresses the round-by-round log and the per-horizon reading lines. Results, plans, replay verdicts and the summary table are still printed.
+Using the following options, we can change some of the default values that the tool assumes. 
 
+- `--max=K` sets the horizon up to which the tool searches for a plan to `K`. The default is `K`=10.
+
+- `--timeout=S` sets a time limit of `S` seconds for each search (that is, for each pair of example and search variant). The default is 60.
+  
+- `--variants=v1,v2` adds the search variants `v1` and `v2` to the search. Variants that are mentioned multiple times are ignored.
+  
+- `--csv=FILE` saves the results of the run to `FILE`. 
+  
+- `--quiet` hides the details of the search.
 
 ## References
 
-Main reference for the constructions implemented here, also containing a benchmark table:
-
-- The accompanying thesis: the public-choice union is Chapter 3, the pruning pipeline and the literal fixpoint are Chapter 5, audience pruning and the link certificate are Appendix A.
+The constructions that the implementations of this tool are based on, as well as the theory and proofs behind them, are developed in the MSc Logic thesis of Louise Wilk. The thesis summarises the benchmarks of the tool.
 
 Additional references:
 
